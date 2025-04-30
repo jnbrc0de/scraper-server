@@ -11,7 +11,8 @@
     "playwright": "^1.40.0",
     "dotenv": "^16.3.1",
     "node-cache": "^5.1.2",
-    "@supabase/supabase-js": "^2.0.0"
+    "@supabase/supabase-js": "^2.0.0",
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": ">=20.0.0"
