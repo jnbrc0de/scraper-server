@@ -1,8 +1,29 @@
+// Instala o Chromium do Playwright se necessário, antes de qualquer require/playwright
+const { execSync } = require('child_process');
+try {
+  execSync('npx --no-install playwright install chromium', { stdio: 'inherit' });
+} catch (e) {
+  try {
+    execSync('node ./node_modules/playwright/cli.js install chromium', { stdio: 'inherit' });
+  } catch (e2) {
+    console.error('Playwright browser install failed:', e2.message);
+    process.exit(1);
+  }
+}
+
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const { scrapePrice } = require('./scrape');
+
+// Validate required env vars
+if (!process.env.SUPABASE_URL || !/^https?:\/\//.test(process.env.SUPABASE_URL)) {
+  throw new Error('Missing or invalid SUPABASE_URL in environment variables');
+}
+if (!process.env.SUPABASE_ANON_KEY) {
+  throw new Error('Missing SUPABASE_ANON_KEY in environment variables');
+}
 
 const app = express();
 const port = process.env.PORT || 3000;

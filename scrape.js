@@ -1,6 +1,8 @@
 const { chromium } = require('playwright');
 const cache = require('./cache');
 require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
 
 const UA_LIST = process.env.UA_LIST
   ? JSON.parse(process.env.UA_LIST)
@@ -71,6 +73,20 @@ async function scrapePrice(url) {
   const cached = cache.get(url);
   if (cached) return { success: true, price: cached, cached: true };
 
+  // Detecta caminho do Chromium baixado pelo Playwright
+  let executablePath;
+  try {
+    const browserPath = path.join(__dirname, '.pw-browsers');
+    const chromiumDir = fs.readdirSync(browserPath)
+      .find(d => d.startsWith('chromium-') || d.startsWith('chromium_headless_shell-'));
+    if (chromiumDir) {
+      const candidate = path.join(browserPath, chromiumDir, 'chrome-linux', 'chrome');
+      if (fs.existsSync(candidate)) executablePath = candidate;
+    }
+  } catch (e) {
+    // fallback: Playwright resolve sozinho
+  }
+
   return await withRetries(async () => {
     const userAgent = UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
     const proxy = PROXIES.length > 0
@@ -83,7 +99,8 @@ async function scrapePrice(url) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         ...(proxy ? [`--proxy-server=${proxy}`] : [])
-      ]
+      ],
+      ...(executablePath ? { executablePath } : {})
     };
 
     const browser = await chromium.launch(launchOptions);
