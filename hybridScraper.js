@@ -21,8 +21,15 @@ const CAPTCHA_API_KEY = process.env.CAPTCHA_API_KEY; // Defina via variável de 
 
 // ====== Proxy seguro ======
 let proxies = [
-    'http://190.61.88.147:8080',
-    'http://45.167.125.61:999'
+    'http://xnodtehg:b87riy6ow5mz@45.127.248.127:5128',
+    'http://xnodtehg:b87riy6ow5mz@198.23.239.134:6540',
+    'http://xnodtehg:b87riy6ow5mz@38.153.152.244:9594',
+    'http://xnodtehg:b87riy6ow5mz@86.38.234.176:6630',
+    'http://xnodtehg:b87riy6ow5mz@173.211.0.148:6641',
+    'http://xnodtehg:b87riy6ow5mz@216.10.27.159:6837',
+    'http://xnodtehg:b87riy6ow5mz@154.36.110.199:6853',
+    'http://xnodtehg:b87riy6ow5mz@45.151.162.198:6600',
+    'http://xnodtehg:b87riy6ow5mz@188.74.210.21:6100'
 ];
 
 let proxyStats = proxies.map(proxy => ({
@@ -134,6 +141,7 @@ function log(msg) {
 
 function getRandomProxy() {
     if (!proxies.length) return null;
+    // Rotaciona de forma aleatória
     return proxies[Math.floor(Math.random() * proxies.length)];
 }
 
