@@ -9,6 +9,7 @@ const fetch = require('node-fetch'); // Para integração com 2Captcha
 const EventEmitter = require('events');
 const logEmitter = new EventEmitter();
 const crypto = require('crypto');
+const HttpsProxyAgent = require('https-proxy-agent');
 
 chromium.use(StealthPlugin);
 
@@ -141,8 +142,13 @@ function log(msg) {
 
 function getRandomProxy() {
     if (!proxies.length) return null;
-    // Rotaciona de forma aleatória
-    return proxies[Math.floor(Math.random() * proxies.length)];
+    // Remove proxies bloqueados
+    const available = proxies.filter(p => {
+        const stat = proxyStats.find(s => s.proxy === p);
+        return !stat || !stat.blocked;
+    });
+    if (!available.length) return null;
+    return available[Math.floor(Math.random() * available.length)];
 }
 
 function getRandomHeaders() {
@@ -169,13 +175,7 @@ async function tryHttpScrape(url) {
             timeout: 15000,
         };
         if (proxy) {
-            const [protocol, rest] = proxy.split('://');
-            const [host, port] = rest.split(':');
-            options.proxy = {
-                protocol,
-                host,
-                port: parseInt(port),
-            };
+            options.httpsAgent = new HttpsProxyAgent(proxy);
         }
         const res = await axios.get(url, options);
         if (
@@ -402,9 +402,7 @@ function getMarketplace(url) {
       { domain: 'submarino.com.br', name: 'submarino' },
       { domain: 'extra.com.br', name: 'extra' },
       { domain: 'carrefour.com.br', name: 'carrefour' },
-      { domain: 'centauro.com.br', name: 'centauro' },
-      { domain: 'fastshop.com.br', name: 'fastshop' },
-      { domain: 'netshoes.com.br', name: 'netshoes' }
+      { domain: 'fastshop.com.br', name: 'fastshop' }
     ];
   
     const found = map.find(entry => url.includes(entry.domain));
@@ -418,17 +416,52 @@ function sanitize(str) {
 }
 const parsers = {
     amazon: html => {
-        // Exemplo simples: extração de preço
         const match = html.match(/"priceblock_ourprice".*?R\$ ([\d.,]+)/);
         return match ? { price: sanitize(match[1]) } : null;
     },
     magalu: html => {
-        // ...parser magalu...
-        return null;
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
     },
     mercadolivre: html => {
-        // ...parser mercadolivre...
-        return null;
+        // Tenta pegar preço à vista destacado
+        let match = html.match(/"price":\s*"?([\d.,]+)/i);
+        if (match) return { price: sanitize(match[1]) };
+        // Fallback para outros padrões
+        match = html.match(/<span[^>]*class="andes-money-amount__fraction"[^>]*>([\d.]+)<\/span>/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    americanas: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    casasbahia: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    kabum: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    pontofrio: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    extra: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    carrefour: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    fastshop: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
+    },
+    shopee: html => {
+        const match = html.match(/"price":\s*"?([\d.,]+)/i);
+        return match ? { price: sanitize(match[1]) } : null;
     },
     outro: html => null
 };
