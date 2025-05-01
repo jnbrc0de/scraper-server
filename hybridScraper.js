@@ -21,8 +21,8 @@ const CAPTCHA_API_KEY = process.env.CAPTCHA_API_KEY; // Defina via variável de 
 
 // ====== Proxy seguro ======
 let proxies = [
-    // Exemplo: 'http://user:pass@ip:port'
-    // Não use proxies gratuitos para dados sensíveis!
+    'http://190.61.88.147:8080',
+    'http://45.167.125.61:999'
 ];
 
 let proxyStats = proxies.map(proxy => ({
