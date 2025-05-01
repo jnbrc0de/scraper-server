@@ -1,3 +1,9 @@
+// Adicione esta linha no topo do arquivo para garantir que o erro não ocorra
+// Certifique-se de instalar a dependência no ambiente de produção
+
+// Se ainda não fez, rode no terminal:
+// npm install cheerio
+
 const cheerio = require('cheerio');
 
 /**
