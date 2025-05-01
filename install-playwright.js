@@ -39,7 +39,12 @@ try {
 const chromiumMarker = path.join(browserPath, 'chromium-marker');
 if (!fs.existsSync(chromiumMarker)) {
   console.log('⬇️  Installing Chromium...');
-  run('npx --no-install playwright install chromium');
+  const playwrightCli = path.join(__dirname, 'node_modules', 'playwright', 'cli.js');
+  if (fs.existsSync(playwrightCli)) {
+    run(`node ${playwrightCli} install chromium`);
+  } else {
+    run('npx playwright install chromium');
+  }
   fs.writeFileSync(chromiumMarker, 'installed');
 } else {
   console.log('✅ Chromium already installed.');
