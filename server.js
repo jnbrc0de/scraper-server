@@ -42,26 +42,31 @@ app.get('/scrape-price', async (req, res) => {
     const result = await scrapePrice(url);
     if (!result.success) throw new Error(result.error || 'Unknown scraping error');
     // Persist data in Supabase (cache history)
-    await supabase.from('scrape_cache').upsert({
-      url,
-      price: result.price,
-      cached: result.cached,
-      scraped_at: new Date().toISOString()
-    }, { onConflict: 'url' });
+    await supabase
+      .from('scrape_cache')
+      .upsert({
+        url,
+        price: result.price,
+        cached: result.cached,
+        scraped_at: new Date().toISOString()
+      }, { onConflict: 'url' })
+      .select('price, cached, scraped_at'); // só retorna campos necessários
     res.json(result);
   } catch (err) {
     // Log error
     try {
-      await supabase.from('scraping_reports').insert({
-        url,
-        success: false,
-        error: err.message,
-        scraped_at: new Date().toISOString()
-      });
+      await supabase
+        .from('scraping_reports')
+        .insert({
+          url,
+          success: false,
+          error: err.message,
+          scraped_at: new Date().toISOString()
+        });
     } catch (e) {
       // Ignore Supabase logging errors
     }
-    res.status(500).json({ success: false, error: err.message });
+    res.status(502).json({ success: false, error: err.message });
   }
 });
 

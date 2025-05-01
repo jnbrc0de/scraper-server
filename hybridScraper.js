@@ -10,6 +10,8 @@ const EventEmitter = require('events');
 const logEmitter = new EventEmitter();
 const crypto = require('crypto');
 const HttpsProxyAgent = require('https-proxy-agent');
+const { simulateRealisticBrowsing } = require('./humanBehavior');
+const EnhancedStealth = require('./stealth');
 
 chromium.use(StealthPlugin);
 
@@ -194,13 +196,8 @@ async function tryHttpScrape(url) {
 }
 
 async function simulateHumanInteraction(page) {
-    // Movimenta o mouse em pontos aleatórios
-    await page.mouse.move(100 + Math.random() * 500, 200 + Math.random() * 200, { steps: 10 });
-    await page.waitForTimeout(500 + Math.random() * 500);
-    await page.mouse.move(300 + Math.random() * 300, 400 + Math.random() * 200, { steps: 8 });
-    // Scrolla a página
-    await page.mouse.wheel(0, 200 + Math.random() * 300);
-    await page.waitForTimeout(500 + Math.random() * 500);
+    // Substituído por simulateRealisticBrowsing
+    await simulateRealisticBrowsing(page);
 }
 
 // ====== Captcha seguro ======
@@ -284,6 +281,11 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
                 }
             });
             page = await context.newPage();
+
+            // --- EnhancedStealth aplicado aqui ---
+            const stealth = new EnhancedStealth();
+            await stealth.applyToPage(page);
+
             const start = Date.now();
             let html = null;
             let success = false;
@@ -507,8 +509,9 @@ async function parallelScrape(urls, captchaApiKey = null, concurrency = MAX_WORK
     const results = [];
     let idx = 0;
     async function worker() {
-        while (idx < urls.length) {
+        while (true) {
             const myIdx = idx++;
+            if (myIdx >= urls.length) break;
             const url = urls[myIdx];
             const html = await hybridScrape(url, true, captchaApiKey);
             results[myIdx] = html;
