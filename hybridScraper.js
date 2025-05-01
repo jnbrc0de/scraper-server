@@ -1,5 +1,5 @@
 const axios = require('axios');
-const { chromium } = require('playwright-extra');
+const playwright = require('playwright-extra');
 const StealthPlugin = require('playwright-extra-plugin-stealth')();
 const randomUseragent = require('random-useragent');
 const fs = require('fs');
@@ -13,7 +13,7 @@ const HttpsProxyAgent = require('https-proxy-agent');
 const { simulateRealisticBrowsing } = require('./humanBehavior');
 const EnhancedStealth = require('./stealth');
 
-chromium.use(StealthPlugin);
+playwright.use(StealthPlugin);
 
 // ====== Configurações de segurança ======
 const CACHE_KEY = process.env.CACHE_KEY || crypto.randomBytes(32).toString('hex'); // Troque por uma chave forte em produção
@@ -264,7 +264,7 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
         const fingerprint = fingerprintGenerator.getFingerprint();
         let browser, context, page;
         try {
-            browser = await chromium.launch(launchOptions);
+            browser = await playwright.chromium.launch(launchOptions);
             context = await browser.newContext({
                 userAgent: fingerprint.headers['user-agent'],
                 viewport: fingerprint.screen,
