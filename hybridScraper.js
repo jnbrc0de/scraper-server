@@ -243,64 +243,81 @@ const fingerprintGenerator = new FingerprintGenerator({
 
 // ====== Gerenciamento de erros robusto ======
 async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
-    const proxy = customProxy || getBestProxy();
-    const launchOptions = {
-        headless: true,
-        args: [],
-    };
-    if (proxy) {
-        launchOptions.proxy = { server: proxy };
-    }
-    // Gera fingerprint realista
-    const fingerprint = fingerprintGenerator.getFingerprint();
-    let browser, context, page;
-    try {
-        browser = await chromium.launch(launchOptions);
-        context = await browser.newContext({
-            userAgent: fingerprint.headers['user-agent'],
-            viewport: fingerprint.screen,
-            locale: fingerprint.languages[0],
-            ...fingerprint.navigator,
-        });
-        await context.addInitScript(fingerprint.injectable);
-        await context.route('**/*', (route) => {
-            const req = route.request();
-            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
-                route.abort();
-            } else {
-                route.continue();
-            }
-        });
-        page = await context.newPage();
-        const start = Date.now();
-        let html = null;
-        let success = false;
+    let proxy = customProxy || getBestProxy();
+    let lastError = null;
+    let triedProxies = new Set();
+    // Tenta com proxy, se falhar, tenta sem proxy
+    for (let attempt = 0; attempt < (proxies.length || 1) + 1; attempt++) {
+        const launchOptions = {
+            headless: true,
+            args: [],
+        };
+        if (proxy) {
+            launchOptions.proxy = { server: proxy };
+        }
+        // Gera fingerprint realista
+        const fingerprint = fingerprintGenerator.getFingerprint();
+        let browser, context, page;
         try {
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await simulateHumanInteraction(page);
-            // Detecta captcha e tenta resolver
-            if (captchaApiKey && (await page.content()).includes('g-recaptcha')) {
-                await solveCaptcha2Captcha(page, captchaApiKey);
+            browser = await chromium.launch(launchOptions);
+            context = await browser.newContext({
+                userAgent: fingerprint.headers['user-agent'],
+                viewport: fingerprint.screen,
+                locale: fingerprint.languages[0],
+                ...fingerprint.navigator,
+            });
+            await context.addInitScript(fingerprint.injectable);
+            await context.route('**/*', (route) => {
+                const req = route.request();
+                if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
+                    route.abort();
+                } else {
+                    route.continue();
+                }
+            });
+            page = await context.newPage();
+            const start = Date.now();
+            let html = null;
+            let success = false;
+            try {
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await simulateHumanInteraction(page);
+                // Detecta captcha e tenta resolver
+                if (captchaApiKey && (await page.content()).includes('g-recaptcha')) {
+                    await solveCaptcha2Captcha(page, captchaApiKey);
+                }
+                html = await page.content();
+                success = true;
+                structuredLog('browser_scrape_success', { url });
+                log('Browser scrape bem-sucedido');
+            } catch (err) {
+                structuredLog('browser_scrape_error', { url, error: err.message });
+                log('Browser scrape falhou: ' + err.message);
+                lastError = err;
+                // Se erro for de proxy, marca como bloqueado e tenta sem proxy
+                if (proxy && /ERR_PROXY_CONNECTION_FAILED|proxy/i.test(err.message)) {
+                    const stat = proxyStats.find(p => p.proxy === proxy);
+                    if (stat) stat.blocked = true;
+                    triedProxies.add(proxy);
+                    proxy = getBestProxy();
+                    if (!proxy || triedProxies.has(proxy)) proxy = null; // fallback sem proxy
+                    continue;
+                }
             }
-            html = await page.content();
-            success = true;
-            structuredLog('browser_scrape_success', { url });
-            log('Browser scrape bem-sucedido');
+            const latency = Date.now() - start;
+            if (proxy) reportProxyResult(proxy, success, latency);
+            return html;
         } catch (err) {
             structuredLog('browser_scrape_error', { url, error: err.message });
-            log('Browser scrape falhou: ' + err.message);
+            lastError = err;
+        } finally {
+            if (page) await page.close().catch(() => {});
+            if (context) await context.close().catch(() => {});
+            if (browser) await browser.close().catch(() => {});
         }
-        const latency = Date.now() - start;
-        if (proxy) reportProxyResult(proxy, success, latency);
-        return html;
-    } catch (err) {
-        structuredLog('browser_scrape_error', { url, error: err.message });
-        return null;
-    } finally {
-        if (page) await page.close().catch(() => {});
-        if (context) await context.close().catch(() => {});
-        if (browser) await browser.close().catch(() => {});
+        break; // se não for erro de proxy, não tenta novamente
     }
+    return null;
 }
 
 let metrics = {
