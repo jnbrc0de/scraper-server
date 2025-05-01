@@ -34,7 +34,12 @@ echo "Instalação concluída com sucesso!"
     execSync('sudo bash ' + scriptPath, { stdio: 'inherit' });
   } catch (e) {
     console.log('Sudo não disponível, tentando sem sudo...');
-    execSync('bash ' + scriptPath, { stdio: 'inherit' });
+    try {
+      execSync('bash ' + scriptPath, { stdio: 'inherit' });
+    } catch (err) {
+      console.error('Falha ao executar o script de instalação:', err.message);
+      process.exit(1);
+    }
   }
 
   // Limpar o script temporário
@@ -53,13 +58,12 @@ echo "Instalação concluída com sucesso!"
         launchOptionsPattern,
         'chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined, args: ["--no-sandbox", "--disable-setuid-sandbox"]'
       );
+      fs.writeFileSync(scrapePath, content);
     }
-    
-    fs.writeFileSync(scrapePath, content);
   }
 
   console.log('Configuração do Playwright concluída!');
 } catch (error) {
-  console.error('Erro durante a instalação:', error);
+  console.error('Erro durante a instalação:', error.message);
   process.exit(1);
 }

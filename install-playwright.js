@@ -38,7 +38,7 @@ function run(command, fallback) {
 // Ensure playwright is installed
 try {
   require.resolve('playwright');
-} catch {
+} catch (err) {
   console.log('📦 Installing playwright...');
   run('npm install playwright');
 }
