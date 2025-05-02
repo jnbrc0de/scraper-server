@@ -11,7 +11,7 @@ class RenderOptimizer {
       args: [
         '--disable-dev-shm-usage',
         '--disable-setuid-sandbox',
-        '--no-sandbox',
+        // '--no-sandbox', // Removido para evitar problemas de contexto/browser
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-web-security',
         '--disable-features=site-per-process',
@@ -19,7 +19,7 @@ class RenderOptimizer {
         '--disable-gpu',
         '--no-first-run',
         '--no-zygote',
-        '--single-process',
+        // '--single-process', // REMOVIDO: causa falha de contexto/browser
         '--disable-extensions'
       ],
       headless: true,

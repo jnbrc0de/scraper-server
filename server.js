@@ -11,6 +11,12 @@ try {
   }
 }
 
+// Silencie logs de D-Bus se quiser (opcional)
+process.on('warning', (w) => {
+  if (w.message && w.message.includes('Failed to connect to the bus')) return;
+  console.warn(w);
+});
+
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
