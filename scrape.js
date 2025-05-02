@@ -1,6 +1,4 @@
 const playwright = require('playwright-extra');
-const StealthPlugin = require('playwright-extra-plugin-stealth')();
-playwright.use(StealthPlugin);
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
@@ -77,6 +75,61 @@ async function sendFailureEmail({ url, failFile, screenshotFile, failReasons }) 
   }
 }
 
+// Logger centralizado com níveis e rotação
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? LOG_LEVELS[process.env.LOG_LEVEL] : 2;
+function logger(level, ...args) {
+  if (LOG_LEVELS[level] <= CURRENT_LOG_LEVEL) {
+    console.log(`[${level.toUpperCase()}][${new Date().toISOString()}]`, ...args);
+  }
+}
+
+// Pool de browser/contexto otimizado
+class BrowserPool {
+  constructor(maxBrowsers = 2) {
+    this.maxBrowsers = maxBrowsers;
+    this.active = 0;
+    this.queue = [];
+    this.browser = null;
+  }
+  async acquire(launchOptions) {
+    if (this.active < this.maxBrowsers) {
+      this.active++;
+      if (!this.browser || !this.browser.isConnected || !this.browser.isConnected()) {
+        if (this.browser) try { await this.browser.close(); } catch {}
+        this.browser = await playwright.chromium.launch(launchOptions);
+      }
+      return this.browser;
+    }
+    return new Promise(resolve => {
+      this.queue.push(async () => {
+        this.active++;
+        if (!this.browser || !this.browser.isConnected || !this.browser.isConnected()) {
+          if (this.browser) try { await this.browser.close(); } catch {}
+          this.browser = await playwright.chromium.launch(launchOptions);
+        }
+        resolve(this.browser);
+      });
+    });
+  }
+  async release() {
+    this.active--;
+    if (this.queue.length > 0) {
+      const next = this.queue.shift();
+      next();
+    }
+  }
+  async closeAll() {
+    if (this.browser) {
+      try { await this.browser.close(); } catch {}
+      this.browser = null;
+    }
+    this.active = 0;
+    this.queue = [];
+  }
+}
+const browserPool = new BrowserPool(parseInt(process.env.BROWSER_POOL_SIZE || '2', 10));
+
 /**
  * Obtém (ou cria) uma instância global de browser Playwright.
  * Garante que o browser está aberto e conectado.
@@ -93,23 +146,16 @@ async function getBrowser(launchOptions) {
   return globalBrowser;
 }
 
-/**
- * Executa uma função com tentativas e espera exponencial.
- * Agora, a cada retry, troca user-agent e proxy (se disponível).
- * @param {Function} fn Função assíncrona a ser executada.
- * @param {number} retries Número de tentativas.
- * @param {number} delay Delay base em ms.
- */
-async function withRetries(fn, retries = 6, delay = 1200) {
+// Retry/Proxy/User-Agent centralizado
+async function withRetries(fn, retries = 3, delayMs = 1200, rotateProxy = true) {
   let lastError;
   for (let i = 0; i < retries; i++) {
     try {
       return await fn(i);
     } catch (e) {
       lastError = e;
-      // Espera exponencial + jitter
-      const jitter = Math.floor(Math.random() * 500);
-      await new Promise(r => setTimeout(r, delay * (i + 1) + jitter));
+      logger('warn', `Retry ${i + 1} failed:`, e.message);
+      await new Promise(r => setTimeout(r, delayMs + Math.floor(Math.random() * 500)));
     }
   }
   throw lastError;
@@ -316,7 +362,7 @@ async function scrapePrice(url) {
       // Reutiliza browser global, fecha apenas a página/contexto
       let browser, context, page;
       try {
-        browser = await getBrowser(launchOptions);
+        browser = await browserPool.acquire(launchOptions);
         context = await browser.newContext({
           userAgent,
           viewport: { width: 1280, height: 800 },
@@ -449,6 +495,8 @@ async function scrapePrice(url) {
               priceNum = Number(cleaned);
             }
             if (price && !isNaN(priceNum)) {
+              await context.close();
+              await browserPool.release();
               return { success: true, price: priceNum, cached: false, failReasons, strategy: strategyName };
             }
             if (reasonIfFail) failReasons.push(reasonIfFail);
@@ -476,6 +524,8 @@ async function scrapePrice(url) {
         failReasons.push(`Nenhuma estratégia funcionou. HTML/screenshot salvos em ${failDir}`);
         // Envia email com logs e capturas de tela
         await sendFailureEmail({ url, failFile, screenshotFile, failReasons });
+        await context.close();
+        await browserPool.release();
         throw new Error(`Nenhuma estratégia funcionou. HTML/screenshot salvos em ${failDir}`);
       } catch (err) {
         // Loga erro do scraping
@@ -488,7 +538,7 @@ async function scrapePrice(url) {
         if (context) {
           try { await context.close(); } catch {}
         }
-        // NÃO fecha o browser global aqui!
+        await browserPool.release();
       }
     }, 3, 2000).catch(error => { // 3 tentativas por proxy, delay maior
       lastError = error;
@@ -509,4 +559,21 @@ async function scrapePrice(url) {
   };
 }
 
-module.exports = { scrapePrice };
+// Paralelismo seguro otimizado
+const MAX_WORKERS = parseInt(process.env.MAX_WORKERS || '3', 10);
+async function parallelScrape(urls, captchaApiKey = null, concurrency = MAX_WORKERS) {
+  const results = [];
+  let idx = 0;
+  async function worker() {
+    while (true) {
+      const myIdx = idx++;
+      if (myIdx >= urls.length) break;
+      const url = urls[myIdx];
+      results[myIdx] = await scrapePrice(url, captchaApiKey);
+    }
+  }
+  await Promise.all(Array(concurrency).fill(0).map(worker));
+  return results;
+}
+
+module.exports = { scrapePrice, parallelScrape };

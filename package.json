@@ -19,7 +19,6 @@
     "node-fetch": "^2.6.7",
     "playwright": "^1.52.0",
     "playwright-extra": "^4.3.6",
-    "playwright-extra-plugin-stealth": "^0.0.1",
     "random-useragent": "^0.5.0"
   },
   "engines": {

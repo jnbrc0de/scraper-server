@@ -1,6 +1,5 @@
 const axios = require('axios');
 const { chromium } = require('playwright-extra');
-const stealth = require('playwright-extra-plugin-stealth')();
 const randomUseragent = require('random-useragent');
 const fs = require('fs');
 const path = require('path');
@@ -10,10 +9,6 @@ const EventEmitter = require('events');
 const logEmitter = new EventEmitter();
 const crypto = require('crypto');
 const HttpsProxyAgent = require('https-proxy-agent');
-const { simulateRealisticBrowsing } = require('./humanBehavior');
-const EnhancedStealth = require('./stealth');
-
-chromium.use(stealth);
 
 // ====== Configurações de segurança ======
 const CACHE_KEY = process.env.CACHE_KEY || crypto.randomBytes(32).toString('hex'); // Troque por uma chave forte em produção
@@ -169,6 +164,81 @@ async function delay(min = 1500, max = 3500) {
     return new Promise(res => setTimeout(res, ms));
 }
 
+// ====== Logger centralizado ======
+const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const CURRENT_LOG_LEVEL = process.env.LOG_LEVEL ? LOG_LEVELS[process.env.LOG_LEVEL] : 2;
+function logger(level, ...args) {
+    if (LOG_LEVELS[level] <= CURRENT_LOG_LEVEL) {
+        console.log(`[${level.toUpperCase()}][${new Date().toISOString()}]`, ...args);
+    }
+}
+
+// ====== Pool de browser/contexto otimizado ======
+class BrowserPool {
+    constructor(maxBrowsers = 2) {
+        this.maxBrowsers = maxBrowsers;
+        this.active = 0;
+        this.queue = [];
+        this.browser = null;
+    }
+    async acquire(launchOptions) {
+        if (this.active < this.maxBrowsers) {
+            this.active++;
+            if (!this.browser || !this.browser.isConnected || !this.browser.isConnected()) {
+                if (this.browser) try { await this.browser.close(); } catch {}
+                this.browser = await chromium.launch(launchOptions);
+            }
+            return this.browser;
+        }
+        return new Promise(resolve => {
+            this.queue.push(async () => {
+                this.active++;
+                if (!this.browser || !this.browser.isConnected || !this.browser.isConnected()) {
+                    if (this.browser) try { await this.browser.close(); } catch {}
+                    this.browser = await chromium.launch(launchOptions);
+                }
+                resolve(this.browser);
+            });
+        });
+    }
+    async release() {
+        this.active--;
+        if (this.queue.length > 0) {
+            const next = this.queue.shift();
+            next();
+        }
+    }
+    async closeAll() {
+        if (this.browser) {
+            try { await this.browser.close(); } catch {}
+            this.browser = null;
+        }
+        this.active = 0;
+        this.queue = [];
+    }
+}
+const browserPool = new BrowserPool(parseInt(process.env.BROWSER_POOL_SIZE || '2', 10));
+
+// ====== Retry/Proxy/User-Agent centralizado ======
+async function withRetries(fn, retries = 3, delayMs = 1200, rotateProxy = true) {
+    let lastError;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn(i);
+        } catch (e) {
+            lastError = e;
+            logger('warn', `Retry ${i + 1} failed:`, e.message);
+            if (rotateProxy) {
+                // Marcar proxy como ruim se possível
+                // ...pode ser expandido...
+            }
+            await delay(delayMs, delayMs + 500);
+        }
+    }
+    throw lastError;
+}
+
+// ====== Scraping principal ======
 async function tryHttpScrape(url) {
     try {
         const proxy = getRandomProxy();
@@ -185,19 +255,24 @@ async function tryHttpScrape(url) {
             res.data &&
             !/captcha|robot|blocked|Desculpe|Acesse/i.test(res.data)
         ) {
-            log('HTTP scrape bem-sucedido');
+            logger('info', 'HTTP scrape bem-sucedido');
             return res.data;
         }
         throw new Error('Blocked or captcha detected');
     } catch (err) {
-        log('HTTP scrape falhou: ' + err.message);
+        logger('warn', 'HTTP scrape falhou:', err.message);
         return null;
     }
 }
 
 async function simulateHumanInteraction(page) {
-    // Substituído por simulateRealisticBrowsing
-    await simulateRealisticBrowsing(page);
+    // Movimenta o mouse em pontos aleatórios
+    await page.mouse.move(100 + Math.random() * 500, 200 + Math.random() * 200, { steps: 10 });
+    await page.waitForTimeout(500 + Math.random() * 500);
+    await page.mouse.move(300 + Math.random() * 300, 400 + Math.random() * 200, { steps: 8 });
+    // Scrolla a página
+    await page.mouse.wheel(0, 200 + Math.random() * 300);
+    await page.waitForTimeout(500 + Math.random() * 500);
 }
 
 // ====== Captcha seguro ======
@@ -246,7 +321,7 @@ const fingerprintGenerator = new FingerprintGenerator({
     operatingSystems: ['windows', 'linux'],
 });
 
-// ====== Gerenciamento de erros robusto ======
+// ====== Scraping com browser/contexto pool, retry, proxy, delays ======
 async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
     let proxy = customProxy || getBestProxy();
     let lastError = null;
@@ -264,7 +339,7 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
         const fingerprint = fingerprintGenerator.getFingerprint();
         let browser, context, page;
         try {
-            browser = await chromium.launch(launchOptions);
+            browser = await browserPool.acquire(launchOptions);
             context = await browser.newContext({
                 userAgent: fingerprint.headers['user-agent'],
                 viewport: fingerprint.screen,
@@ -281,11 +356,6 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
                 }
             });
             page = await context.newPage();
-
-            // --- EnhancedStealth aplicado aqui ---
-            const stealth = new EnhancedStealth();
-            await stealth.applyToPage(page);
-
             const start = Date.now();
             let html = null;
             let success = false;
@@ -299,10 +369,10 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
                 html = await page.content();
                 success = true;
                 structuredLog('browser_scrape_success', { url });
-                log('Browser scrape bem-sucedido');
+                logger('info', 'Browser scrape bem-sucedido');
             } catch (err) {
                 structuredLog('browser_scrape_error', { url, error: err.message });
-                log('Browser scrape falhou: ' + err.message);
+                logger('warn', 'Browser scrape falhou:', err.message);
                 lastError = err;
                 // Se erro for de proxy, marca como bloqueado e tenta sem proxy
                 if (proxy && /ERR_PROXY_CONNECTION_FAILED|proxy/i.test(err.message)) {
@@ -316,6 +386,8 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
             }
             const latency = Date.now() - start;
             if (proxy) reportProxyResult(proxy, success, latency);
+            await context.close();
+            await browserPool.release();
             return html;
         } catch (err) {
             structuredLog('browser_scrape_error', { url, error: err.message });
@@ -323,7 +395,6 @@ async function tryBrowserScrape(url, captchaApiKey = null, customProxy = null) {
         } finally {
             if (page) await page.close().catch(() => {});
             if (context) await context.close().catch(() => {});
-            if (browser) await browser.close().catch(() => {});
         }
         break; // se não for erro de proxy, não tenta novamente
     }
@@ -344,7 +415,7 @@ function structuredLog(event, data = {}) {
         event,
         ...data
     };
-    console.log(JSON.stringify(logObj));
+    logger('info', JSON.stringify(logObj));
     logEmitter.emit(event, logObj);
 }
 
@@ -480,7 +551,11 @@ async function hybridScrape(url, useCache = true, captchaApiKey = null) {
     let html = await tryHttpScrape(url);
     let blocked = false;
     if (!html) {
-        html = await tryBrowserScrape(url, captchaApiKey);
+        html = await withRetries(
+            () => tryBrowserScrape(url, captchaApiKey),
+            3,
+            2000
+        );
         blocked = !html;
     }
     if (html && useCache) saveCache(url, html);
@@ -513,8 +588,7 @@ async function parallelScrape(urls, captchaApiKey = null, concurrency = MAX_WORK
             const myIdx = idx++;
             if (myIdx >= urls.length) break;
             const url = urls[myIdx];
-            const html = await hybridScrape(url, true, captchaApiKey);
-            results[myIdx] = html;
+            results[myIdx] = await hybridScrape(url, true, captchaApiKey);
         }
     }
     await Promise.all(Array(concurrency).fill(0).map(worker));
