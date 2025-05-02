@@ -378,8 +378,9 @@ const enhancedStealth = new EnhancedStealth();
 const { simulateRealisticBrowsing } = require('./humanBehavior');
 const FingerprintGenerator = require('fingerprint-generator');
 
-// Fingerprint generator para rotação a cada request
-let fingerprintGenerator = new FingerprintGenerator({
+// Corrija a inicialização do FingerprintGenerator para usar .default se necessário
+let FingerprintGenClass = FingerprintGenerator && FingerprintGenerator.default ? FingerprintGenerator.default : FingerprintGenerator;
+let fingerprintGenerator = new FingerprintGenClass({
   browsers: [{ name: 'chrome', minVersion: 100 }],
   devices: ['desktop'],
   operatingSystems: ['windows', 'linux'],
@@ -387,7 +388,7 @@ let fingerprintGenerator = new FingerprintGenerator({
 
 // Rotaciona fingerprint periodicamente (ex: a cada 6h)
 setInterval(() => {
-  fingerprintGenerator = new FingerprintGenerator({
+  fingerprintGenerator = new FingerprintGenClass({
     browsers: [{ name: 'chrome', minVersion: 100 }],
     devices: ['desktop'],
     operatingSystems: ['windows', 'linux'],
@@ -966,7 +967,7 @@ process.on('warning', (w) => {
 // --- Atualização contínua de fingerprints e dependências ---
 // Rotaciona fingerprints semanalmente (além do já existente a cada 6h)
 setInterval(() => {
-  fingerprintGenerator = new FingerprintGenerator({
+  fingerprintGenerator = new FingerprintGenClass({
     browsers: [{ name: 'chrome', minVersion: 100 }],
     devices: ['desktop'],
     operatingSystems: ['windows', 'linux'],
