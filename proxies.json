@@ -1,0 +1,12 @@
+[
+  {
+    "id": "brightdata_proxy",
+    "url": "http://brd-customer-hl_aa4b1775-zone-bytebuy:j87j7wu0492w@brd.superproxy.io:33335",
+    "type": "http",
+    "country": "BR",
+    "city": "Vitória da Conquista",
+    "isp": "BrightData",
+    "tags": "residential",
+    "enabled": true
+  }
+] 

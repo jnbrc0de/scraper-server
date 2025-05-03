@@ -1,26 +1,46 @@
 {
   "name": "scraper-server",
   "version": "1.0.0",
+  "description": "High-performance, resilient, and modular web scraping server",
   "type": "commonjs",
   "scripts": {
     "build": "node ./install-playwright.js",
-    "start": "node server.js"
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "lint": "eslint src/**/*.js",
+    "format": "prettier --write \"src/**/*.js\"",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "benchmark": "node benchmark.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
-    "axios": "^1.6.8",
+    "axios": "^1.9.0",
     "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "fingerprint-generator": "^2.0.0",
+    "form-data": "^4.0.0",
     "https-proxy-agent": "^7.0.2",
+    "jimp": "^0.22.10",
     "node-cache": "^5.1.2",
     "node-fetch": "^2.6.7",
+    "nodemailer": "^6.9.13",
     "playwright": "^1.52.0",
     "playwright-extra": "^4.3.6",
     "random-useragent": "^0.5.0",
-    "nodemailer": "^6.9.13"
+    "tesseract.js": "^4.1.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-jest": "^27.9.0",
+    "eslint-plugin-node": "^11.1.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.3",
+    "prettier": "^3.2.5"
   },
   "engines": {
     "node": ">=20.0.0"
