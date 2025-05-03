@@ -9,6 +9,12 @@ const config = {
     logLevel: process.env.LOG_LEVEL || 'info'
   },
   
+  // Logging configuration (adicionado para resolver erro de logger)
+  logging: {
+    level: process.env.LOG_LEVEL || 'info',
+    levels: { error: 0, warn: 1, info: 2, debug: 3 }
+  },
+  
   // Browser settings
   browser: {
     poolSize: process.env.BROWSER_POOL_SIZE || 5,
@@ -32,12 +38,12 @@ const config = {
   
   // Proxy settings
   proxy: {
-    enabled: process.env.PROXY_ENABLED === 'true',
-    roundRobin: process.env.PROXY_ROUND_ROBIN === 'true',
-    stickySessions: process.env.PROXY_STICKY_SESSIONS !== 'false',
-    sources: process.env.PROXY_SOURCES ? process.env.PROXY_SOURCES.split(',') : [],
-    testUrl: process.env.PROXY_TEST_URL || 'https://httpbin.org/ip',
-    testInterval: parseInt(process.env.PROXY_TEST_INTERVAL || '300000', 10) // 5 minutes
+    enabled: true,
+    proxyFile: './proxies.json',
+    rotationStrategy: 'sequential',
+    healthCheckInterval: 900000,
+    healthCheckUrl: 'https://httpbin.org/ip',
+    maxFailures: 5
   },
   
   // Captcha handling settings
@@ -111,6 +117,12 @@ const config = {
       fixed: process.env.STEALTH_FIXED_FINGERPRINT === 'true',
       userAgent: process.env.STEALTH_FIXED_USER_AGENT
     }
+  },
+  
+  // Cache configuration (adicionado para compatibilidade)
+  cache: {
+    enabled: true,
+    ttl: 3600
   }
 };
 

@@ -6,8 +6,13 @@ const config = require('../config');
 
 class Logger {
   constructor() {
-    this.levels = config.logging.levels;
-    this.currentLogLevel = this.levels[config.logging.level] || this.levels.info;
+    // Definir níveis padrão caso config.logging não esteja disponível
+    const defaultLevels = { error: 0, warn: 1, info: 2, debug: 3 };
+    const defaultLevel = 'info';
+    
+    // Verificar se config e config.logging existem
+    this.levels = (config && config.logging && config.logging.levels) || defaultLevels;
+    this.currentLogLevel = this.levels[(config && config.logging && config.logging.level) || defaultLevel] || this.levels.info;
   }
 
   /**
