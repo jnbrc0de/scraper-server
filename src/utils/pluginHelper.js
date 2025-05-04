@@ -7,7 +7,7 @@
 function setupPluginDependencyResolution() {
   try {
     // Verifica se temos as bibliotecas necessárias
-    const { existsSync } = require('fs');
+    const { existsSync, mkdirSync, copyFileSync, writeFileSync } = require('fs');
     const path = require('path');
     
     // Tentar carregar puppeteer-extra-plugin-stealth
@@ -18,17 +18,93 @@ function setupPluginDependencyResolution() {
     } catch (e) {
       try {
         // Try alternate resolution method - look directly in node_modules
-        const potentialPath = path.join(__dirname, '..', '..', 'node_modules', 'puppeteer-extra-plugin-stealth', 'index.js');
-        if (existsSync(potentialPath)) {
-          stealthPath = potentialPath;
-          console.log('Stealth plugin encontrado (método alternativo) em:', stealthPath);
-        } else {
+        const potentialPaths = [
+          path.join(__dirname, '..', '..', 'node_modules', 'puppeteer-extra-plugin-stealth', 'index.js'),
+          path.join(process.cwd(), 'node_modules', 'puppeteer-extra-plugin-stealth', 'index.js'),
+          '/opt/render/project/src/node_modules/puppeteer-extra-plugin-stealth/index.js' // Common path in render.com
+        ];
+        
+        for (const potentialPath of potentialPaths) {
+          if (existsSync(potentialPath)) {
+            stealthPath = potentialPath;
+            console.log('Stealth plugin encontrado (método alternativo) em:', stealthPath);
+            break;
+          }
+        }
+        
+        if (!stealthPath) {
           console.warn('Aviso: puppeteer-extra-plugin-stealth não encontrado. Os recursos de evasão podem não funcionar corretamente.');
+          // Create mock module to prevent errors
+          createMockStealthModules();
           return;
         }
       } catch (e2) {
         console.warn('Aviso: puppeteer-extra-plugin-stealth não encontrado. Os recursos de evasão podem não funcionar corretamente.');
+        // Create mock module to prevent errors
+        createMockStealthModules();
         return;
+      }
+    }
+    
+    // Function to create mock modules if needed
+    function createMockStealthModules() {
+      try {
+        const modulesDir = path.join(__dirname, '..', '..', 'node_modules');
+        const stealthDir = path.join(modulesDir, 'stealth');
+        const evasionsDir = path.join(stealthDir, 'evasions');
+        
+        // Create directories if they don't exist
+        if (!existsSync(stealthDir)) {
+          mkdirSync(stealthDir, { recursive: true });
+        }
+        
+        if (!existsSync(evasionsDir)) {
+          mkdirSync(evasionsDir, { recursive: true });
+        }
+        
+        // List of common evasion files
+        const evasionFiles = [
+          'chrome.app',
+          'chrome.csi',
+          'chrome.loadTimes',
+          'chrome.runtime',
+          'chrome.webgl',
+          'defaultArgs',
+          'iframe.contentWindow',
+          'media.codecs',
+          'navigator.hardwareConcurrency',
+          'navigator.languages',
+          'navigator.permissions',
+          'navigator.plugins',
+          'navigator.vendor',
+          'navigator.webdriver',
+          'sourceurl',
+          'user-agent-override',
+          'webgl.vendor',
+          'window.outerdimensions'
+        ];
+        
+        // Create empty mock files for each evasion
+        for (const file of evasionFiles) {
+          const filePath = path.join(evasionsDir, file + '.js');
+          if (!existsSync(filePath)) {
+            const mockContent = `
+// Mock evasion module created by pluginHelper
+module.exports = function() {
+  return {
+    name: '${file}',
+    requires: [],
+    onPageCreated: async function() {}
+  };
+};`;
+            writeFileSync(filePath, mockContent);
+            console.log(`Created mock evasion module: ${file}.js`);
+          }
+        }
+        
+        console.log('Created mock stealth modules to prevent errors');
+      } catch (err) {
+        console.warn('Failed to create mock modules:', err.message);
       }
     }
     
@@ -42,11 +118,11 @@ function setupPluginDependencyResolution() {
       if (existsSync(evasionsPath)) {
         // Criar diretórios stealth/evasions se não existirem
         if (!existsSync(stealthDirPath)) {
-          require('fs').mkdirSync(stealthDirPath, { recursive: true });
+          mkdirSync(stealthDirPath, { recursive: true });
         }
         
         if (!existsSync(stealthEvasionsPath)) {
-          require('fs').mkdirSync(stealthEvasionsPath, { recursive: true });
+          mkdirSync(stealthEvasionsPath, { recursive: true });
         }
         
         // Lista de arquivos de evasão comuns
@@ -80,7 +156,7 @@ function setupPluginDependencyResolution() {
             try {
               // No Windows, copiar o arquivo em vez de criar link simbólico
               if (process.platform === 'win32') {
-                require('fs').copyFileSync(sourcePath, targetPath);
+                copyFileSync(sourcePath, targetPath);
               } else {
                 // Em sistemas Unix, criar link simbólico
                 require('fs').symlinkSync(sourcePath, targetPath);
@@ -90,23 +166,80 @@ function setupPluginDependencyResolution() {
               console.warn(`Não foi possível criar link para ${file}.js:`, linkErr.message);
               // Tentar cópia direta como fallback
               try {
-                require('fs').copyFileSync(sourcePath, targetPath);
+                copyFileSync(sourcePath, targetPath);
                 console.log(`Copiado ${file}.js como fallback`);
               } catch (copyErr) {
                 console.warn(`Também não foi possível copiar ${file}.js:`, copyErr.message);
+                
+                // If copy fails, create an empty mock file
+                try {
+                  const mockContent = `
+// Mock evasion module created by pluginHelper
+module.exports = function() {
+  return {
+    name: '${file}',
+    requires: [],
+    onPageCreated: async function() {}
+  };
+};`;
+                  writeFileSync(targetPath, mockContent);
+                  console.log(`Created mock evasion module for ${file}.js`);
+                } catch (mockErr) {
+                  console.warn(`Could not create mock module for ${file}.js:`, mockErr.message);
+                }
               }
+            }
+          } else if (!existsSync(sourcePath) && !existsSync(targetPath)) {
+            // Source doesn't exist, create a mock file
+            try {
+              const mockContent = `
+// Mock evasion module created by pluginHelper
+module.exports = function() {
+  return {
+    name: '${file}',
+    requires: [],
+    onPageCreated: async function() {}
+  };
+};`;
+              writeFileSync(targetPath, mockContent);
+              console.log(`Created mock evasion module for ${file}.js (source missing)`);
+            } catch (mockErr) {
+              console.warn(`Could not create mock module for ${file}.js:`, mockErr.message);
             }
           }
         }
+      } else {
+        // If evasions directory doesn't exist, create mock modules
+        console.warn('Evasions directory not found, creating mock modules');
+        createMockStealthModules();
       }
     } catch (fileErr) {
       console.warn('Erro ao configurar arquivos de evasão:', fileErr.message);
+      // Attempt to create mock modules if file operations fail
+      createMockStealthModules();
     }
     
     // Configurar resolução de dependências para o playwright-extra
     try {
-      const { addExtra } = require('playwright-extra');
-      const playwright = require('playwright');
+      // Load playwright-extra safely
+      let playwrightExtra;
+      try {
+        playwrightExtra = require('playwright-extra');
+      } catch (e) {
+        console.warn('playwright-extra not found or could not be loaded:', e.message);
+        return;
+      }
+      
+      const { addExtra } = playwrightExtra;
+      
+      // Check if playwright can be loaded
+      let playwright;
+      try {
+        playwright = require('playwright');
+      } catch (e) {
+        console.warn('playwright not found or could not be loaded:', e.message);
+        return;
+      }
       
       // Verificar se o método de plugins existe e iniciar corretamente
       let plugins;
@@ -135,10 +268,34 @@ function setupPluginDependencyResolution() {
             'stealth/evasions/window.outerdimensions': path.join(path.dirname(stealthPath), 'evasions', 'window.outerdimensions'),
           };
           
+          // Add fallback paths for server environments (like render.com)
+          const serverFallbackPaths = {
+            'stealth/evasions/chrome.webgl': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'chrome.webgl'),
+            'stealth/evasions/chrome.runtime': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'chrome.runtime'),
+            'stealth/evasions/iframe.contentWindow': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'iframe.contentWindow'),
+            'stealth/evasions/media.codecs': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'media.codecs'),
+            'stealth/evasions/navigator.hardwareConcurrency': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.hardwareConcurrency'),
+            'stealth/evasions/navigator.languages': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.languages'),
+            'stealth/evasions/navigator.permissions': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.permissions'),
+            'stealth/evasions/navigator.plugins': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.plugins'),
+            'stealth/evasions/navigator.vendor': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.vendor'),
+            'stealth/evasions/sourceurl': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'sourceurl'),
+            'stealth/evasions/user-agent-override': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'user-agent-override'),
+            'stealth/evasions/webgl.vendor': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'webgl.vendor'),
+            'stealth/evasions/window.outerdimensions': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'window.outerdimensions'),
+          };
+          
           // Garantir que todos os caminhos existem
           for (const [key, depPath] of Object.entries(dependencyMap)) {
             if (!existsSync(depPath + '.js')) {
               console.warn(`Aviso: Caminho de dependência inválido: ${depPath}.js`);
+              
+              // Check if the server fallback path exists
+              if (existsSync(serverFallbackPaths[key] + '.js')) {
+                dependencyMap[key] = serverFallbackPaths[key];
+                console.log(`Using server fallback path for ${key}: ${serverFallbackPaths[key]}`);
+                continue;
+              }
               
               // Tentar encontrar o arquivo em um caminho alternativo
               const altPath = path.join(path.dirname(path.dirname(stealthPath)), key + '.js');
@@ -158,9 +315,32 @@ function setupPluginDependencyResolution() {
                 return originalRequire.call(this, dependencyMap[name]);
               } catch (e) {
                 console.warn(`Falha ao carregar dependência ${name}, retornando módulo vazio`);
-                return {};
+                // Return a minimal mock module
+                return {
+                  name: name.split('/').pop(),
+                  requires: [],
+                  onPageCreated: async function() {}
+                };
               }
             }
+            
+            // Try to load directly from our node_modules/stealth directory
+            if (name.startsWith('stealth/evasions/') && existsSync(path.join(__dirname, '..', '..', 'node_modules', name + '.js'))) {
+              try {
+                const modulePath = path.join(__dirname, '..', '..', 'node_modules', name);
+                console.log(`Resolvendo dependência (caminho direto): ${name} -> ${modulePath}`);
+                return originalRequire.call(this, modulePath);
+              } catch (e) {
+                // Fallback to empty mock module
+                console.warn(`Falha ao carregar dependência direta ${name}, retornando módulo vazio`);
+                return {
+                  name: name.split('/').pop(),
+                  requires: [],
+                  onPageCreated: async function() {}
+                };
+              }
+            }
+            
             return originalRequire.call(this, name);
           };
           
@@ -187,10 +367,33 @@ function setupPluginDependencyResolution() {
             'stealth/evasions/window.outerdimensions': path.join(path.dirname(stealthPath), 'evasions', 'window.outerdimensions'),
           };
           
+          // Server fallback paths for render.com environment
+          const serverFallbackPaths = {
+            'stealth/evasions/chrome.webgl': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'chrome.webgl'),
+            'stealth/evasions/chrome.runtime': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'chrome.runtime'),
+            'stealth/evasions/iframe.contentWindow': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'iframe.contentWindow'),
+            'stealth/evasions/media.codecs': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'media.codecs'),
+            'stealth/evasions/navigator.hardwareConcurrency': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.hardwareConcurrency'),
+            'stealth/evasions/navigator.languages': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.languages'),
+            'stealth/evasions/navigator.permissions': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.permissions'),
+            'stealth/evasions/navigator.plugins': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.plugins'),
+            'stealth/evasions/navigator.vendor': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'navigator.vendor'),
+            'stealth/evasions/sourceurl': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'sourceurl'),
+            'stealth/evasions/user-agent-override': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'user-agent-override'),
+            'stealth/evasions/webgl.vendor': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'webgl.vendor'),
+            'stealth/evasions/window.outerdimensions': path.join(__dirname, '..', '..', 'node_modules', 'stealth', 'evasions', 'window.outerdimensions'),
+          };
+          
           // Verificar se temos um mapeamento para a dependência solicitada
           if (dependencyMap[name] && existsSync(dependencyMap[name] + '.js')) {
             console.log(`Resolvendo dependência: ${name} -> ${dependencyMap[name]}`);
             return require(dependencyMap[name]);
+          }
+          
+          // Check server fallback paths
+          if (serverFallbackPaths[name] && existsSync(serverFallbackPaths[name] + '.js')) {
+            console.log(`Resolvendo dependência (servidor): ${name} -> ${serverFallbackPaths[name]}`);
+            return require(serverFallbackPaths[name]);
           }
           
           // Tentar resolver diretamente no diretório stealth/evasions
@@ -205,8 +408,12 @@ function setupPluginDependencyResolution() {
             return require(name);
           } catch (e) {
             console.warn(`Aviso: Não foi possível resolver a dependência: ${name}`);
-            // Retornar um módulo vazio para evitar falhas
-            return {};
+            // Return a minimal mock module that won't crash the application
+            return {
+              name: name.split('/').pop(),
+              requires: [],
+              onPageCreated: async function() {}
+            };
           }
         });
         

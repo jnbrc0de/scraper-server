@@ -24,7 +24,17 @@ class BrowserService {
     this.lastHealthCheck = Date.now();
     this.healthCheckInterval = config.browser.healthCheckInterval || 60000; // Default 1 minute
     this.memoryLimitMB = config.browser.memoryLimitMB;
-    this.userAgents = antiDetection.getUserAgents();
+    
+    // Safely initialize user agents list
+    try {
+      this.userAgents = antiDetection.getUserAgents && typeof antiDetection.getUserAgents === 'function' 
+        ? antiDetection.getUserAgents() 
+        : getDefaultUserAgents();
+    } catch (e) {
+      logger.warn('Error initializing user agents from antiDetection module, using defaults', {}, e);
+      this.userAgents = getDefaultUserAgents();
+    }
+    
     this.sessionHeaders = new Map(); // Track headers for consistency
     this.browserRotationCounter = 0;
     this.browserRotationThreshold = config.browser.rotationThreshold || 50; // Rotation after 50 uses
@@ -1073,6 +1083,31 @@ function createFixedFingerprint() {
     sessionStorageSize: 10000000,
     localStorageSize: 10000000
   };
+}
+
+/**
+ * Returns a list of default user agents to use if the antiDetection module fails
+ * @returns {string[]} Array of user agent strings
+ */
+function getDefaultUserAgents() {
+  return [
+    // Chrome on Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    
+    // Chrome on macOS
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    
+    // Firefox on Windows
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
+  ];
 }
 
 module.exports = new BrowserService(); 

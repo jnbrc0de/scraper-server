@@ -15,7 +15,8 @@
     "benchmark": "node benchmark.js",
     "setup-plugins": "node setup-plugin-dependencies.js",
     "cleanup": "node src/utils/cleanup.js",
-    "fix-dependencies": "node install-dependencies.js"
+    "fix-dependencies": "node install-dependencies.js",
+    "fix": "node fix-dependencies.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
