@@ -23,7 +23,7 @@ class AmericanasAdapter extends AbstractAdapter {
       price: [
         '[data-testid="price-value"]',
         '.priceSales',
-        '.price__SalesPrice",
+        '.price__SalesPrice',
         '.sales-price',
         '.product-price-value',
         '.price-box__SalesPrice'
