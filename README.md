@@ -1,6 +1,6 @@
 # Scraper Server
 
-High-performance, resilient, and modular web scraping server for price extraction.
+High-performance, resilient, and modular web scraping server with built-in anti-detection features.
 
 ## Principais Recursos
 
@@ -13,52 +13,132 @@ High-performance, resilient, and modular web scraping server for price extractio
 - **Cache Inteligente**: Minimiza requisições repetidas
 - **Tolerância a Falhas**: Múltiplas estratégias de retry e fallback
 
-## Requisitos
+## Installation
 
-- Node.js 20.0.0 ou superior
-- NPM 10.0.0 ou superior
+### Prerequisites
+- Node.js >= 20.0.0
+- NPM or Yarn
 
-## Instalação
+### Standard Installation
 
-### Método padrão
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd scraper-server
+
+# Install dependencies
 npm install
+
+# Install Playwright browsers
+npm run install-browsers
 ```
 
-### Solução para problemas de permissão em Windows PowerShell
-Se você encontrar problemas ao executar o npm no PowerShell, como erros de permissão ou "Cannot find module 'helmet'", utilize o script de instalação de dependências:
+### Installation Troubleshooting
+
+If you encounter errors during installation, particularly with Playwright browser installation, try the following solutions:
+
+#### Windows
 
 ```bash
-node install-dependencies.js
+# Run the Windows-specific Chrome installation script
+npm run install-chrome-windows
+
+# Or use the fix-dependencies script to resolve plugin issues
+npm run fix
 ```
 
-Ou use o comando:
+#### Linux/Docker/Render
+
 ```bash
-npm run fix-dependencies
+# Run the browser installation fix script
+npm run fix-browser
+
+# Or install system Chrome for containerized environments
+sudo apt-get update && sudo apt-get install -y google-chrome-stable
 ```
 
-## Uso
+## Configuration
 
-### Método padrão
-Inicie o servidor:
+Create a `.env` file in the root directory with the following content:
+
+```
+# Server
+PORT=3000
+NODE_ENV=production
+
+# Browser Settings
+BROWSER_POOL_SIZE=3
+BROWSER_HEADLESS=true
+MEMORY_LIMIT_MB=2048
+
+# Proxy Settings (optional)
+PROXY_ENABLED=false
+PROXY_SERVER=
+PROXY_USERNAME=
+PROXY_PASSWORD=
+```
+
+### Using System Chrome
+
+If you face issues with the Playwright browser download, you can configure the system to use your installed Chrome/Chromium by creating a `browser-config.json` file:
+
+```json
+{
+  "chromiumPath": "/path/to/chrome"
+}
+```
+
+On Windows, this is typically:
+- `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`
+- `C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe`
+
+## Running
+
 ```bash
+# Start the server
 npm start
-```
 
-### Método alternativo para Windows
-Inicie com o script que verifica e instala dependências automaticamente:
-```bash
-npm run start:win
-```
-Ou diretamente:
-```bash
-node start-server.js
-```
-
-### Modo de desenvolvimento
-```bash
+# Start in development mode with auto-reload
 npm run dev
 ```
+
+## Fixing Common Issues
+
+### "Plugin dependency not found" Error
+
+```bash
+# Run the dependency fix script
+npm run fix
+```
+
+### Browser Installation Error
+
+```bash
+# Run the browser installation fix script
+npm run fix-browser
+```
+
+### Windows-specific Browser Issues
+
+```bash
+# Run the Windows-optimized Chrome installation
+npm run install-chrome-windows
+```
+
+## Production Deployment Checklist
+
+- [ ] Run `npm run fix` and `npm run fix-browser`
+- [ ] Set up all required environment variables
+- [ ] Ensure Chrome/Chromium is available with execute permissions
+- [ ] Configure proper logging and monitoring
+- [ ] Set up restart policies (PM2 or similar)
+- [ ] Secure all exposed endpoints
+- [ ] Test the scraping with real targets
+- [ ] Configure appropriate resource limits
+
+## License
+
+MIT
 
 ## Endpoints
 

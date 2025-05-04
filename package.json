@@ -18,7 +18,8 @@
     "fix-dependencies": "node install-dependencies.js",
     "fix": "node fix-dependencies.js",
     "fix-browser": "node fix-browser-installation.js",
-    "install-browsers": "npx playwright install chromium"
+    "install-browsers": "npx playwright install chromium",
+    "install-chrome-windows": "node install-chromium.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
