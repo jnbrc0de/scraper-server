@@ -290,11 +290,33 @@ class BrowserService {
         // Reset counter
         this.browserRotationCounter = 0;
       }
-      
-      // Set default launch options
-      const defaultOptions = {
-        headless: config.performance.useHeadlessMode !== false,
-        args: [
+      // PATCH: Handle missing browser executable
+      try {
+        // Set default launch options
+        const defaultOptions = {
+          headless: config.performance.useHeadlessMode !== false,
+          executablePath: process.env.CHROME_EXECUTABLE_PATH || undefined,
+          args: [
+            '--disable-dev-shm-usage',
+            '--disable-setuid-sandbox',
+            '--no-sandbox',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--disable-infobars',
+            '--window-size=1366,768',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-web-security',
+            '--disable-javascript-timers-throttling',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows'
+          ],
+          chromiumSandbox: false,
+          ignoreHTTPSErrors: true,
+          defaultViewport: null, // Use window size instead of viewport
+          // Add Bright Data proxy configuration
+          proxy: getProxySettings()
+        };
           '--disable-dev-shm-usage',
           '--disable-setuid-sandbox',
           '--no-sandbox',

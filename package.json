@@ -16,7 +16,9 @@
     "setup-plugins": "node setup-plugin-dependencies.js",
     "cleanup": "node src/utils/cleanup.js",
     "fix-dependencies": "node install-dependencies.js",
-    "fix": "node fix-dependencies.js"
+    "fix": "node fix-dependencies.js",
+    "fix-browser": "node fix-browser-installation.js",
+    "install-browsers": "npx playwright install chromium"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
@@ -34,7 +36,7 @@
     "node-cache": "^5.1.2",
     "node-fetch": "^2.6.7",
     "nodemailer": "^6.9.13",
-    "playwright": "^1.52.0",
+    "playwright": "^1.39.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "random-useragent": "^0.5.0",
