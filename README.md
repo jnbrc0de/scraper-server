@@ -1,6 +1,6 @@
 # Scraper Server
 
-Sistema de web scraping de alta performance com recursos avançados de proxy, anti-detecção e resiliência.
+High-performance, resilient, and modular web scraping server for price extraction.
 
 ## Principais Recursos
 
@@ -13,127 +13,97 @@ Sistema de web scraping de alta performance com recursos avançados de proxy, an
 - **Cache Inteligente**: Minimiza requisições repetidas
 - **Tolerância a Falhas**: Múltiplas estratégias de retry e fallback
 
-## Configuração
+## Requisitos
 
-### Requisitos
+- Node.js 20.0.0 ou superior
+- NPM 10.0.0 ou superior
 
-- Node.js 20+
-- NPM 10+
-- 2GB RAM (recomendado)
+## Instalação
 
-### Instalação Rápida
-
+### Método padrão
 ```bash
-# Clonar o repositório
-git clone https://github.com/seu-usuario/scraper-server.git
-cd scraper-server
-
-# Instalar dependências e configurar o ambiente
-npm run setup
-
-# Iniciar em modo de produção
-npm run prod
+npm install
 ```
 
-Para configuração detalhada, consulte [SETUP.md](SETUP.md).
-
-## Uso da API
-
-O servidor expõe uma API REST para realizar scraping:
-
-### Obter preço de um produto
+### Solução para problemas de permissão em Windows PowerShell
+Se você encontrar problemas ao executar o npm no PowerShell, como erros de permissão ou "Cannot find module 'helmet'", utilize o script de instalação de dependências:
 
 ```bash
-curl -X POST http://localhost:3000/api/scrape/price \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://www.example.com/product/123"}'
+node install-dependencies.js
 ```
 
-Resposta:
-
-```json
-{
-  "success": true,
-  "cached": false,
-  "price": 129.99,
-  "title": "Produto Exemplo",
-  "url": "https://www.example.com/product/123"
-}
-```
-
-### Extrair múltiplos produtos
-
+Ou use o comando:
 ```bash
-curl -X POST http://localhost:3000/api/scrape/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "urls": [
-      "https://www.example.com/product/123",
-      "https://www.example.com/product/456"
-    ],
-    "concurrency": 2
-  }'
+npm run fix-dependencies
+```
+
+## Uso
+
+### Método padrão
+Inicie o servidor:
+```bash
+npm start
+```
+
+### Método alternativo para Windows
+Inicie com o script que verifica e instala dependências automaticamente:
+```bash
+npm run start:win
+```
+Ou diretamente:
+```bash
+node start-server.js
+```
+
+### Modo de desenvolvimento
+```bash
+npm run dev
+```
+
+## Endpoints
+
+- `GET /health` - Verificar status do servidor
+- `GET /scrape-price?url=URL_DO_PRODUTO` - Extrair preço de um URL
+- `POST /scrape-batch` - Extrair preços em lote
+
+## Solução de problemas comuns
+
+### Erro: Cannot find module 'helmet'
+Se encontrar este erro, execute:
+```bash
+npm run fix-dependencies
+```
+
+Ou instale manualmente:
+```bash
+npm install helmet compression
+```
+
+### Erro no captchaService
+Se encontrar problemas relacionados ao serviço de captcha, você pode usar a versão simplificada que está incluída.
+
+### Erros de permissão no PowerShell
+Se encontrar erros relacionados a políticas de execução no PowerShell, você pode:
+
+1. Abrir o PowerShell como administrador e executar:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+2. Ou usar o Node.js Command Prompt em vez do PowerShell.
+
+3. Use o script de inicialização alternativo:
+```bash
+npm run start:win
+```
+
+## Manutenção
+
+Para limpar arquivos temporários:
+```bash
+npm run cleanup
 ```
 
 ## Estrutura do Projeto
 
 ```
-scraper-server/
-├── src/
-│   ├── adapters/        # Adaptadores específicos para sites
-│   ├── config/          # Configurações centralizadas
-│   ├── controllers/     # Controladores da API
-│   ├── services/        # Serviços principais
-│   │   ├── browser/     # Gerenciamento de navegadores
-│   │   ├── cache/       # Serviço de cache
-│   │   ├── captcha/     # Detecção e resolução de captchas
-│   │   ├── proxy/       # Gerenciamento de proxies
-│   │   └── ...          
-│   └── utils/           # Utilitários
-├── logs/                # Logs da aplicação
-├── screenshots/         # Capturas de tela (debugging)
-└── tokens/              # Tokens armazenados
-```
-
-## Proxy Bright Data
-
-Este projeto utiliza o proxy residencial da Bright Data para melhorar a taxa de sucesso do scraping. A configuração do proxy é feita automaticamente durante o setup.
-
-Para mais detalhes sobre a configuração e uso do proxy, consulte [BRIGHTDATA-INFO.md](BRIGHTDATA-INFO.md).
-
-## Desenvolvimento
-
-```bash
-# Iniciar em modo de desenvolvimento com hot reload
-npm run dev
-
-# Executar linting
-npm run lint
-
-# Formatar código
-npm run format
-```
-
-### Adicionando suporte a novos sites
-
-Para adicionar suporte a um novo site, crie um adaptador em `src/adapters/` seguindo o padrão dos adaptadores existentes. O adaptador deve implementar as seguintes funções:
-
-- `isBlocked(page)`: Detecta se o acesso está bloqueado
-- `preProcess(page)`: Preparações antes da extração
-- `extract(page)`: Extrai dados da página
-- `canHandle(url)`: Verifica se o adaptador pode lidar com a URL
-
-## Solução de Problemas
-
-Consulte o arquivo [SETUP.md](SETUP.md) para dicas de solução de problemas comuns.
-
-## Próximos Passos
-
-- [ ] Suporte para extração de imagens
-- [ ] Interface de administração web
-- [ ] Suporte a extração de horários de disponibilidade
-- [ ] Análise de sentimento em reviews
-
-## Licença
-
-Este projeto está licenciado sob a licença MIT - veja o arquivo LICENSE para detalhes.

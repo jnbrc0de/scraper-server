@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node ./install-playwright.js",
     "start": "node src/server.js",
+    "start:win": "node start-server.js",
     "dev": "nodemon src/server.js",
     "lint": "eslint src/**/*.js",
     "format": "prettier --write \"src/**/*.js\"",
@@ -13,7 +14,8 @@
     "test:watch": "jest --watch",
     "benchmark": "node benchmark.js",
     "setup-plugins": "node setup-plugin-dependencies.js",
-    "cleanup": "node src/utils/cleanup.js"
+    "cleanup": "node src/utils/cleanup.js",
+    "fix-dependencies": "node install-dependencies.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",

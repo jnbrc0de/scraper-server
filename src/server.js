@@ -39,8 +39,23 @@ process.on('warning', (w) => {
 // Import dependencies
 const express = require('express');
 const cors = require('cors');
-const helmet = require('helmet');
-const compression = require('compression');
+let helmet, compression;
+
+// Tentativa de importar módulos opcionais
+try {
+  helmet = require('helmet');
+} catch (e) {
+  console.log('Módulo helmet não encontrado. Configuração de segurança não será aplicada.');
+  helmet = null;
+}
+
+try {
+  compression = require('compression');
+} catch (e) {
+  console.log('Módulo compression não encontrado. Compressão HTTP não será aplicada.');
+  compression = null;
+}
+
 const config = require('./config');
 const logger = require('./utils/logger');
 const scraperController = require('./controllers/scraperController');
@@ -56,8 +71,14 @@ const port = config.server.port || process.env.PORT || 3000;
 
 // Set up middleware
 app.use(cors());
-app.use(helmet()); // Adiciona headers de segurança
-app.use(compression()); // Comprime as respostas HTTP
+// Adiciona helmet apenas se disponível
+if (helmet) {
+  app.use(helmet()); // Adiciona headers de segurança
+}
+// Adiciona compression apenas se disponível
+if (compression) {
+  app.use(compression()); // Comprime as respostas HTTP
+}
 app.use(express.json({ limit: '1mb' }));
 
 // Middleware de log para requisições
