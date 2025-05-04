@@ -8,7 +8,8 @@
     "dev": "nodemon src/server.js",
     "postinstall": "npx playwright install --with-deps chromium",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build": "echo \"No build step necessary\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
