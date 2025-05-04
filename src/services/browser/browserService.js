@@ -291,8 +291,7 @@ class BrowserService {
         this.browserRotationCounter = 0;
       }
       
-      // PATCH: Handle missing browser executable
-      // CHROME_PATH_PATCH
+      // PATCH: Handle missing browser executable & WINDOWS_CHROME_PATCH (merged)
       const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
       // Set default launch options
       const defaultOptions = {

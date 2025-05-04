@@ -18,7 +18,9 @@
     "fix-dependencies": "node install-dependencies.js",
     "fix": "node fix-dependencies.js",
     "fix-browser": "node fix-browser-installation.js",
-    "install-browsers": "npx playwright install chromium",
+    "fix-windows-browser": "node fix-windows-browser.js",
+    "setup-windows": "node setup-windows-environment.js",
+    "install-browsers": "node fix-windows-browser.js",
     "install-chrome-windows": "node install-chromium.js",
     "direct-chrome": "node download-chrome.js"
   },
