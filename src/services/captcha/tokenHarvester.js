@@ -4,7 +4,7 @@
  * for common sites to maintain a ready supply of valid tokens
  */
 const { chromium } = require('playwright-extra');
-const stealthPlugin = require('../browser/stealthPlugin');
+const { stealthPlugin, getProxySettings } = require('../browser/stealthPlugin');
 const logger = require('../../utils/logger');
 const config = require('../../config');
 const axios = require('axios');

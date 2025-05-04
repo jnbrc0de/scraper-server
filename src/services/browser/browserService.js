@@ -6,7 +6,7 @@ const playwright = require('playwright-extra');
 const logger = require('../../utils/logger');
 const config = require('../../config');
 const proxyManager = require('../proxy/proxyManager');
-const stealthPlugin = require('./stealthPlugin');
+const { stealthPlugin, proxyConfig, getProxySettings } = require('./stealthPlugin');
 const { URL } = require('url');
 const crypto = require('crypto');
 const antiDetection = require('../../utils/antiDetection');
@@ -223,7 +223,9 @@ class BrowserService {
         ],
         chromiumSandbox: false,
         ignoreHTTPSErrors: true,
-        defaultViewport: { width: 1366, height: 768 }
+        defaultViewport: { width: 1366, height: 768 },
+        // Add Bright Data proxy configuration
+        proxy: getProxySettings()
       };
       
       // Create new browser instance
@@ -757,7 +759,9 @@ class BrowserService {
           '--no-sandbox',
           '--disable-accelerated-2d-canvas',
           '--disable-gpu'
-        ]
+        ],
+        // Add Bright Data proxy configuration
+        proxy: getProxySettings()
       });
       
       // Create a context with default options
