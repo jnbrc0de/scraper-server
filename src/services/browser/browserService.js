@@ -25,13 +25,14 @@ class BrowserService {
     this.healthCheckInterval = config.browser.healthCheckInterval || 60000; // Default 1 minute
     this.memoryLimitMB = config.browser.memoryLimitMB;
     
-    // Safely initialize user agents list
+    // Check for antiDetection module and add safe handling of missing getUserAgents
     try {
-      this.userAgents = antiDetection.getUserAgents && typeof antiDetection.getUserAgents === 'function' 
+      // Add safe handling of the getUserAgents() function
+      this.userAgents = typeof antiDetection.getUserAgents === 'function' 
         ? antiDetection.getUserAgents() 
         : getDefaultUserAgents();
     } catch (e) {
-      logger.warn('Error initializing user agents from antiDetection module, using defaults', {}, e);
+      logger.warn('Error initializing user agents from antiDetection module, using defaults', e);
       this.userAgents = getDefaultUserAgents();
     }
     

@@ -244,7 +244,7 @@ async function simulateRealisticTyping(page, selector, text, options = {}) {
 }
 
 /**
- * Applies enhanced browser fingerprint evasion techniques
+ * Applies advanced browser fingerprint evasion techniques
  * @param {import('playwright').Page} page - Playwright page
  * @param {Object} options - Fingerprint options
  * @returns {Promise<void>}

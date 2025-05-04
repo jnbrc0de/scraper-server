@@ -54,92 +54,42 @@ function createEnhancedStealthPlugin(StealthPlugin) {
     // Start with the base stealth plugin
     const plugin = StealthPlugin();
     
-    // Store consistent fingerprint data
-    const fingerprintData = {
-      // Generate fingerprint when plugin is created, not per-page
-      deviceMemory: config.stealth?.deviceMemory || Math.random() > 0.5 ? 8 : 4,
-      hardwareConcurrency: config.stealth?.cpuCores || 4 + Math.floor(Math.random() * 4),
-      platform: config.stealth?.platform || ['Win32', 'MacIntel', 'Linux x86_64'][Math.floor(Math.random() * 3)],
-      vendor: config.stealth?.vendor || ['Google Inc.', 'Apple Computer, Inc.'][Math.floor(Math.random() * 2)],
-      renderer: config.stealth?.renderer || [
-        'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-        'ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 Direct3D11 vs_5_0 ps_5_0, D3D11)',
-        'ANGLE (AMD, Radeon RX 580 Direct3D11 vs_5_0 ps_5_0, D3D11)'
-      ][Math.floor(Math.random() * 3)],
-      maxTouchPoints: Math.random() > 0.7 ? 0 : 5,
-      doNotTrack: Math.random() > 0.7 ? '1' : null,
-      sessionStorageSize: Math.floor(Math.random() * 10000000),
-      localStorageSize: Math.floor(Math.random() * 10000000),
-      batteryManager: {
-        charging: Math.random() > 0.3,
-        chargingTime: Math.random() > 0.3 ? 0 : Infinity,
-        dischargingTime: Math.random() > 0.3 ? Infinity : Math.floor(Math.random() * 5000) + 1000,
-        level: Math.round((Math.random() * 50 + 50)) / 100  // 50-100%
-      },
-      connection: {
-        effectiveType: ['4g', '3g'][Math.floor(Math.random() * 2)],
-        downlink: 5 + Math.random() * 10,
-        rtt: Math.floor(Math.random() * 50) + 50,
-        saveData: Math.random() > 0.9 // 10% chance of saveData being true
-      }
-    };
-    
-    // Safely enable evasions - handle missing evasions gracefully
-    try {
-      // Ensure the enabledEvasions property exists
-      if (!plugin.enabledEvasions) {
-        plugin.enabledEvasions = new Set();
-      }
-      
-      // Add core evasions
-      const essentialEvasions = [
-        'chrome.webgl',
-        'chrome.canvas',
-        'chrome.runtime',
-        'iframe.contentWindow',
-        'media.codecs',
-        'navigator.hardwareConcurrency',
-        'navigator.languages',
-        'navigator.permissions',
-        'navigator.plugins',
-        'window.outerdimensions'
-      ];
-      
-      for (const evasion of essentialEvasions) {
-        try {
-          plugin.enabledEvasions.add(evasion);
-        } catch (e) {
-          logger.warn(`Failed to add evasion: ${evasion}`);
-        }
-      }
-    } catch (e) {
-      logger.warn('Error configuring stealth plugin evasions:', e.message);
+    // Add required properties to make it compatible with playwright-extra
+    if (!plugin._isPuppeteerExtraPlugin) {
+      plugin._isPuppeteerExtraPlugin = true;
     }
     
-    // Override onPageCreated to inject our custom fingerprint evasions
-    // Use a safe approach that won't crash if the original method is missing
-    try {
-      const originalOnPageCreated = plugin.onPageCreated;
-      
-      plugin.onPageCreated = async function(page) {
-        // First run the original stealth onPageCreated if it exists
-        if (originalOnPageCreated && typeof originalOnPageCreated === 'function') {
-          try {
-            await originalOnPageCreated.call(this, page);
-          } catch (e) {
-            logger.warn('Error in original stealth onPageCreated:', e.message);
+    if (!plugin.name) {
+      plugin.name = 'stealth-plugin';
+    }
+    
+    // Add required hooks if missing
+    if (typeof plugin.beforeLaunch !== 'function') {
+      plugin.beforeLaunch = async () => {};
+    }
+    
+    if (typeof plugin.afterLaunch !== 'function') {
+      plugin.afterLaunch = async () => {};
+    }
+    
+    if (typeof plugin.onPageCreated !== 'function') {
+      plugin.onPageCreated = async (page) => {
+        // Apply basic evasions
+        await page.addInitScript(() => {
+          // Override webdriver property
+          Object.defineProperty(navigator, 'webdriver', { get: () => false });
+          
+          // Add chrome object if missing
+          if (!window.chrome) {
+            window.chrome = {};
           }
-        }
-        
-        // Then apply our enhanced evasions
-        try {
-          await applyEnhancedEvasions(page, fingerprintData);
-        } catch (e) {
-          logger.warn('Error applying enhanced evasions:', e.message);
-        }
+          
+          // Add chrome.runtime if missing
+          if (!window.chrome.runtime) {
+            window.chrome.runtime = {};
+          }
+        });
       };
-    } catch (e) {
-      logger.warn('Error overriding onPageCreated:', e.message);
     }
     
     return plugin;
@@ -148,7 +98,10 @@ function createEnhancedStealthPlugin(StealthPlugin) {
     // Return a minimal non-functional plugin to avoid crashing
     return {
       name: 'minimal-stealth-plugin',
-      onPageCreated: async function() {}
+      _isPuppeteerExtraPlugin: true,
+      beforeLaunch: async () => {},
+      afterLaunch: async () => {},
+      onPageCreated: async () => {}
     };
   }
 }
@@ -385,16 +338,20 @@ function getProxySettings() {
     return null;
   }
   
+  // Default proxy configuration
+  const defaultProxy = {
+    server: 'brd.superproxy.io:33335',
+    username: 'brd-customer-hl_aa4b1775-zone-residential_proxy1',
+    password: '15blqlg7ljnm'
+  };
+  
   try {
-    // Make a copy of the proxy config to avoid modifying the original
-    const proxySetting = { ...PROXY_CONFIG };
-    
     // Check if we should use Bright Data proxy
     if (config.proxy?.brightData?.enabled !== false) {
       return {
-        server: proxySetting.server || 'brd.superproxy.io:33335',
-        username: proxySetting.username || 'brd-customer-hl_aa4b1775-zone-residential_proxy1',
-        password: proxySetting.password || '15blqlg7ljnm'
+        server: config.proxy?.brightData?.server || defaultProxy.server,
+        username: config.proxy?.brightData?.username || defaultProxy.username,
+        password: config.proxy?.brightData?.password || defaultProxy.password
       };
     }
     

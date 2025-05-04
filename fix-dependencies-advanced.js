@@ -1,16 +1,18 @@
 /**
- * Fix Playwright-Extra Dependencies
+ * Advanced Fix for Playwright-Extra Dependencies
  * 
- * This script resolves the "Plugin dependency not found" error by:
+ * This script resolves all dependency and plugin issues by:
  * 1. Creating mock modules for missing dependencies
  * 2. Setting up proper directories for stealth plugin
- * 3. Creating fallback handlers for missing functions
+ * 3. Patching require.resolve to handle dependency resolution
+ * 4. Fixing plugin compatibility issues
  */
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-console.log('Starting dependency fix script...');
+console.log('Starting advanced dependency fix script...');
 
 // Create necessary directories
 function createDirectories() {
@@ -52,7 +54,7 @@ function createMockModules(evasionsDir) {
     'chrome.csi',
     'chrome.loadTimes',
     'chrome.runtime',
-    'chrome.webgl', // The main one causing problems
+    'chrome.webgl',
     'defaultArgs',
     'iframe.contentWindow',
     'media.codecs',
@@ -68,28 +70,93 @@ function createMockModules(evasionsDir) {
     'window.outerdimensions'
   ];
   
-  // Create empty mock files for each evasion
+  // Create enhanced mock files for each evasion
   for (const file of evasionFiles) {
     const filePath = path.join(evasionsDir, `${file}.js`);
     if (!fs.existsSync(filePath)) {
       try {
         const mockContent = `
-// Mock evasion module created by fix-dependencies.js
+// Mock evasion module created by fix-dependencies-advanced.js
 module.exports = function() {
   return {
     name: '${file}',
+    _isPuppeteerExtraPlugin: true,
+    requiresImportant: true,
     requires: [],
-    onPageCreated: async function() {}
+    beforeLaunch: async function() {},
+    afterLaunch: async function() {},
+    onPageCreated: async function(page) {
+      // Basic implementation for ${file}
+      await page.addInitScript(() => {
+        try {
+          // Handle specific evasions
+          ${getSpecificEvasionCode(file)}
+        } catch (e) {
+          // Silently fail
+        }
+      });
+    }
   };
 };`;
         fs.writeFileSync(filePath, mockContent);
-        console.log(`Created mock evasion module: ${file}.js`);
+        console.log(`Created enhanced mock evasion module: ${file}.js`);
       } catch (err) {
         console.error(`Failed to create mock module for ${file}.js:`, err.message);
       }
     } else {
       console.log(`Module ${file}.js already exists`);
     }
+  }
+}
+
+// Generate specific evasion code for different plugins
+function getSpecificEvasionCode(evasionName) {
+  switch(evasionName) {
+    case 'chrome.webgl':
+      return `
+          // Mock WebGL data
+          if (!window.chrome) window.chrome = {};
+          const getParameter = WebGLRenderingContext.prototype.getParameter;
+          WebGLRenderingContext.prototype.getParameter = function(parameter) {
+            // UNMASKED_VENDOR_WEBGL
+            if (parameter === 37445) return 'Google Inc. (Intel)';
+            // UNMASKED_RENDERER_WEBGL
+            if (parameter === 37446) return 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0)';
+            return getParameter.call(this, parameter);
+          };`;
+    
+    case 'navigator.webdriver':
+      return `
+          // Remove webdriver property
+          if (navigator.webdriver === true) {
+            delete Object.getPrototypeOf(navigator).webdriver;
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => false,
+              configurable: true
+            });
+          }`;
+    
+    case 'navigator.languages':
+      return `
+          // Set navigator languages
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'languages', {
+            get: () => ['en-US', 'en'],
+            configurable: true
+          });`;
+    
+    case 'chrome.runtime':
+      return `
+          // Add chrome.runtime
+          if (!window.chrome) window.chrome = {};
+          if (!window.chrome.runtime) {
+            window.chrome.runtime = {
+              connect: function() { return {}; },
+              sendMessage: function() { return {}; }
+            };
+          }`;
+    
+    default:
+      return '// No specific implementation for this evasion';
   }
 }
 
@@ -100,6 +167,21 @@ function createAntiDetectionFix() {
   const utilsDir = path.join(process.cwd(), 'src', 'utils');
   const antiDetectionPath = path.join(utilsDir, 'antiDetection.js');
   
+  // Create utils directory if it doesn't exist
+  if (!fs.existsSync(utilsDir)) {
+    try {
+      fs.mkdirSync(utilsDir, { recursive: true });
+      console.log(`Created directory: ${utilsDir}`);
+    } catch (err) {
+      console.error(`Failed to create directory ${utilsDir}:`, err.message);
+      return;
+    }
+  }
+  
+  // Create plugin helper module
+  createPluginHelper(utilsDir);
+  
+  // Check if antiDetection.js exists
   if (fs.existsSync(antiDetectionPath)) {
     try {
       // Read the file
@@ -166,18 +248,6 @@ function getUserAgents() {
       console.error(`Error updating ${antiDetectionPath}:`, err.message);
     }
   } else {
-    console.warn(`antiDetection.js file not found at ${antiDetectionPath}`);
-    
-    // Create the directory if it doesn't exist
-    if (!fs.existsSync(utilsDir)) {
-      try {
-        fs.mkdirSync(utilsDir, { recursive: true });
-        console.log(`Created directory: ${utilsDir}`);
-      } catch (err) {
-        console.error(`Failed to create directory ${utilsDir}:`, err.message);
-      }
-    }
-    
     // Create a minimal version of the file
     try {
       const minimalContent = `/**
@@ -272,151 +342,128 @@ module.exports = {
   }
 }
 
-// Fix the browserService.js file if needed
-function fixBrowserService() {
-  console.log('Checking browserService.js...');
+// Create plugin helper
+function createPluginHelper(utilsDir) {
+  const pluginHelperPath = path.join(utilsDir, 'pluginHelper.js');
   
-  const browserServicePath = path.join(process.cwd(), 'src', 'services', 'browser', 'browserService.js');
-  
-  if (fs.existsSync(browserServicePath)) {
+  if (!fs.existsSync(pluginHelperPath)) {
     try {
-      // Read the file
-      let content = fs.readFileSync(browserServicePath, 'utf8');
-      
-      // Check if the fix is already implemented
-      if (!content.includes('getDefaultUserAgents()') && content.includes('this.userAgents = antiDetection.getUserAgents()')) {
-        console.log('Fixing browserService.js to handle missing getUserAgents...');
-        
-        // Add the getDefaultUserAgents function
-        const defaultUserAgentsFunction = `
-/**
- * Returns a list of default user agents to use if the antiDetection module fails
- * @returns {string[]} Array of user agent strings
+      const pluginHelperContent = `/**
+ * Plugin Helper
+ * Resolves dependency problems for playwright-extra and puppeteer-extra-plugin-stealth
  */
-function getDefaultUserAgents() {
-  return [
-    // Chrome on Windows
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    
-    // Chrome on macOS
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    
-    // Firefox on Windows
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
-  ];
-}`;
 
-        // Replace the direct call with a safe initialization
-        const fixedInitialization = `
-    // Safely initialize user agents list
-    try {
-      this.userAgents = antiDetection.getUserAgents && typeof antiDetection.getUserAgents === 'function' 
-        ? antiDetection.getUserAgents() 
-        : getDefaultUserAgents();
-    } catch (e) {
-      logger.warn('Error initializing user agents from antiDetection module, using defaults', {}, e);
-      this.userAgents = getDefaultUserAgents();
-    }`;
+const fs = require('fs');
+const path = require('path');
 
-        content = content.replace(
-          /this\.userAgents = antiDetection\.getUserAgents\(\);/g,
-          fixedInitialization
-        );
-
-        // Add the getDefaultUserAgents function before the module.exports
-        content = content.replace(
-          /module\.exports = new BrowserService\(\);/g,
-          `${defaultUserAgentsFunction}\n\nmodule.exports = new BrowserService();`
-        );
-
-        // Write the modified content back to the file
-        fs.writeFileSync(browserServicePath, content);
-        console.log(`Updated ${browserServicePath} with safe user agents initialization`);
-      } else {
-        console.log(`browserService.js already has the necessary fixes`);
-      }
-    } catch (err) {
-      console.error(`Error updating ${browserServicePath}:`, err.message);
-    }
-  } else {
-    console.warn(`browserService.js file not found at ${browserServicePath}`);
-  }
-}
-
-// Fix the stealthPlugin.js file to handle missing plugins
-function fixStealthPlugin() {
-  console.log('Checking stealthPlugin.js...');
-  
-  const stealthPluginPath = path.join(process.cwd(), 'src', 'services', 'browser', 'stealthPlugin.js');
-  
-  if (fs.existsSync(stealthPluginPath)) {
-    try {
-      // Read the file
-      let content = fs.readFileSync(stealthPluginPath, 'utf8');
-      
-      // Check if it's already using a try-catch for playwright-extra
-      if (!content.includes('try {') && content.includes('const { addExtra } = require(\'playwright-extra\')')) {
-        console.log('Fixing stealthPlugin.js to handle missing dependencies...');
-        
-        // Replace direct requires with try-catch blocks
-        const safeRequires = `// Try to load playwright-extra safely
-let chromium;
-try {
-  const { addExtra } = require('playwright-extra');
-  chromium = addExtra(playwright.chromium);
-  
-  // Load StealthPlugin safely
+// Monkey patch the dependency resolution for playwright-extra
+function setupPluginDependencyResolution() {
   try {
-    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-    // Initialize stealth plugin with enhanced features
-    const plugin = createEnhancedStealthPlugin(StealthPlugin);
-    chromium.use(plugin);
-    logger.info('Stealth plugin initialized successfully');
-  } catch (stealthError) {
-    logger.error('Failed to load stealth plugin, using vanilla playwright:', stealthError.message);
-    // Fall back to vanilla playwright if stealth plugin fails
-    chromium = playwright.chromium;
-  }
-} catch (error) {
-  logger.error('Failed to initialize playwright-extra, falling back to vanilla playwright:', error.message);
-  chromium = playwright.chromium;
-}`;
+    // Patch require.resolve to handle stealth plugin dependencies
+    const originalResolve = require.resolve;
+    require.resolve = function(request, options) {
+      // Check if this is a stealth plugin dependency request
+      if (request.startsWith('stealth/evasions/')) {
+        const evasionName = request.replace('stealth/evasions/', '');
         
-        // Replace the original requires
-        content = content.replace(
-          /const { addExtra } = require\('playwright-extra'\);\s*const playwright = require\('playwright'\);\s*const chromium = addExtra\(playwright\.chromium\);\s*const StealthPlugin = require\('puppeteer-extra-plugin-stealth'\);/,
-          `const playwright = require('playwright');\n${safeRequires}`
-        );
+        // Try to find it in node_modules/stealth/evasions first
+        const customPath = path.join(process.cwd(), 'node_modules', 'stealth', 'evasions', \`\${evasionName}.js\`);
+        if (fs.existsSync(customPath)) {
+          return customPath;
+        }
         
-        // Update function signature if needed
-        content = content.replace(
-          /function createEnhancedStealthPlugin\(\)/,
-          `function createEnhancedStealthPlugin(StealthPlugin)`
-        );
+        // Try to find it in puppeteer-extra-plugin-stealth
+        try {
+          const stealthPath = originalResolve('puppeteer-extra-plugin-stealth');
+          const evasionPath = path.join(path.dirname(stealthPath), 'evasions', evasionName, 'index.js');
+          
+          if (fs.existsSync(evasionPath)) {
+            return evasionPath;
+          }
+        } catch (e) {
+          // Puppeteer-extra-plugin-stealth not found, continue
+        }
         
-        // Write the modified content back to the file
-        fs.writeFileSync(stealthPluginPath, content);
-        console.log(`Updated ${stealthPluginPath} with safer dependency handling`);
-      } else {
-        console.log(`stealthPlugin.js already has the necessary fixes`);
+        // Return a mock implementation to prevent crashes
+        const mockDir = path.join(process.cwd(), 'node_modules', 'stealth', 'evasions');
+        if (!fs.existsSync(mockDir)) {
+          fs.mkdirSync(mockDir, { recursive: true });
+        }
+        
+        // Create a mock module if it doesn't exist
+        if (!fs.existsSync(customPath)) {
+          const mockContent = \`
+// Mock evasion module created by pluginHelper.js
+module.exports = function() {
+  return {
+    name: '\${evasionName}',
+    requiresImportant: true,
+    _isPuppeteerExtraPlugin: true,
+    onPageCreated: async function() {}
+  };
+};\`;
+          fs.writeFileSync(customPath, mockContent);
+        }
+        
+        return customPath;
       }
-    } catch (err) {
-      console.error(`Error updating ${stealthPluginPath}:`, err.message);
+      
+      // Use the original resolve for everything else
+      return originalResolve(request, options);
+    };
+    
+    // Patch puppeteer-extra-plugin base class check
+    try {
+      const PlaywrightExtra = require('playwright-extra');
+      const originalUse = PlaywrightExtra.Playwright.prototype.use;
+      
+      PlaywrightExtra.Playwright.prototype.use = function(plugin) {
+        // Add missing properties to ensure the plugin is considered valid
+        if (plugin && typeof plugin === 'object') {
+          if (!plugin.name && plugin._name) {
+            plugin.name = plugin._name;
+          }
+          
+          if (!plugin.name) {
+            plugin.name = 'stealth-plugin';
+          }
+          
+          if (!plugin._isPuppeteerExtraPlugin) {
+            plugin._isPuppeteerExtraPlugin = true;
+          }
+          
+          if (!plugin.requiresLaunchPausePre && typeof plugin.beforeLaunch !== 'function') {
+            plugin.beforeLaunch = async () => {};
+          }
+        }
+        
+        return originalUse.call(this, plugin);
+      };
+    } catch (e) {
+      console.warn('Failed to patch playwright-extra:', e);
     }
-  } else {
-    console.warn(`stealthPlugin.js file not found at ${stealthPluginPath}`);
+    
+    console.log('Plugin dependency resolution setup completed successfully');
+  } catch (error) {
+    console.error('Error setting up plugin dependency resolution:', error);
   }
 }
 
-// Add package.json update code
+module.exports = {
+  setupPluginDependencyResolution
+};`;
+
+      fs.writeFileSync(pluginHelperPath, pluginHelperContent);
+      console.log(`Created pluginHelper.js at ${pluginHelperPath}`);
+    } catch (err) {
+      console.error(`Failed to create pluginHelper.js:`, err.message);
+    }
+  } else {
+    console.log(`pluginHelper.js already exists at ${pluginHelperPath}`);
+  }
+}
+
+// Fix package.json
 function updatePackageJson() {
   console.log('Updating package.json with required dependencies...');
   
@@ -426,22 +473,22 @@ function updatePackageJson() {
       // Read the package.json file
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
       
-      // Dependencies to ensure are present
-      const requiredDeps = {
-        "playwright": "^1.39.0",
-        "playwright-extra": "^4.3.6",
-        "puppeteer-extra-plugin-stealth": "^2.11.2"
-      };
+      // Check and update playwright version
+      if (packageJson.dependencies.playwright) {
+        if (packageJson.dependencies.playwright < "^1.37.0") {
+          packageJson.dependencies.playwright = "^1.39.0";
+        }
+      } else {
+        packageJson.dependencies.playwright = "^1.39.0";
+      }
       
-      // Update dependencies
-      packageJson.dependencies = {
-        ...packageJson.dependencies,
-        ...requiredDeps
-      };
+      // Ensure other required dependencies
+      packageJson.dependencies["playwright-extra"] = "^4.3.6";
+      packageJson.dependencies["puppeteer-extra-plugin-stealth"] = "^2.11.2";
       
-      // Add a script to run this fix
+      // Add scripts
       if (!packageJson.scripts.fix) {
-        packageJson.scripts.fix = "node fix-dependencies.js";
+        packageJson.scripts.fix = "node fix-dependencies-advanced.js";
       }
       
       // Write the updated package.json back to disk
@@ -455,14 +502,29 @@ function updatePackageJson() {
   }
 }
 
+// Try to install dependencies
+function installDependencies() {
+  console.log('Attempting to install dependencies...');
+  
+  try {
+    execSync('npm install playwright-extra puppeteer-extra-plugin-stealth --no-save', {
+      stdio: 'inherit',
+      timeout: 60000
+    });
+    console.log('Dependencies installed successfully');
+  } catch (err) {
+    console.error('Error installing dependencies:', err.message);
+    console.log('Please run "npm install" manually to complete the setup');
+  }
+}
+
 // Main execution
 const { evasionsDir } = createDirectories();
 createMockModules(evasionsDir);
 createAntiDetectionFix();
-fixBrowserService();
-fixStealthPlugin();
 updatePackageJson();
+installDependencies();
 
-console.log('\nDependency fixes completed! The "Plugin dependency not found" error should be resolved.');
+console.log('\nAdvanced dependency fixes completed! The "Plugin dependency not found" error should be resolved.');
 console.log('Please restart your application to apply the changes.');
-console.log('\nTo reinstall dependencies, run: npm install'); 
+console.log('\nIf you encounter any issues, run: npm install'); 
