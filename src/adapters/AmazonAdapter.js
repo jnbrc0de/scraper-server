@@ -402,12 +402,11 @@ class AmazonAdapter extends AbstractAdapter {
             text.includes('indisponível') || 
             text.includes('out of stock') ||
             text.includes('unavailable') ||
-            text.includes('esgotado'))
+            text.includes('esgotado'))) {
             return false;
           }
         }
       }
-      
       // 3. Check availability text
       const availabilityElement = await page.$('#availability');
       if (availabilityElement) {
