@@ -199,9 +199,10 @@ class TokenHarvester {
     let page = null;
 
     try {
-      // Launch browser
+      // Launch browser with Bright Data proxy
       browser = await chromium.launch({
-        headless: true
+        headless: true,
+        proxy: getProxySettings()
       });
 
       // Create context with stealth

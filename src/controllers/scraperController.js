@@ -6,15 +6,39 @@ const logger = require('../utils/logger');
 const config = require('../config');
 const { withRetry } = require('../utils/retry');
 const browserService = require('../services/browser/browserService');
-const captchaService = require('../services/captcha/captchaService');
+// Temporarily commented out services to debug
+// const captchaService = require('../services/captcha/captchaService');
 const proxyManager = require('../services/proxy/proxyManager');
 const cacheService = require('../services/cache/cacheService');
 const adapterFactory = require('../adapters/AdapterFactory');
-const emailService = require('../services/notification/emailService');
-const supabaseService = require('../services/database/supabaseService');
+// const emailService = require('../services/notification/emailService');
+// const supabaseService = require('../services/database/supabaseService');
 const TaskQueue = require('../services/queue/taskQueue');
 const fs = require('fs').promises;
 const path = require('path');
+
+// Create mockup services to prevent errors
+const captchaService = {
+  solveRecaptchaV2: async () => ({ token: 'mock-token' }),
+  solveImageCaptcha: async () => 'mock-solution',
+  getHarvestedToken: () => null,
+  submitForManualResolution: async () => ({ id: 'mock-id' }),
+  checkManualSolution: () => null
+};
+
+const emailService = {
+  enabled: false,
+  sendFailureNotification: async () => {},
+  sendSuccessNotification: async () => {}
+};
+
+const supabaseService = {
+  isInitialized: () => false,
+  initialize: () => {},
+  upsertScrapeCache: async () => {},
+  logScraperSuccess: async () => {},
+  logScraperError: async () => {}
+};
 
 class ScraperController {
   constructor() {

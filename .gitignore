@@ -1,0 +1,49 @@
+# Dependências
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Ambiente
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs e dados temporários
+logs/
+*.log
+screenshots/
+captchas/
+tokens/
+.tmp/
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# Certificados e arquivos de segurança
+*.pem
+*.cert
+*.key
+*.crt
+
+# Arquivos específicos do editor
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# Arquivos de cache
+.cache/
+.parcel-cache/
+.webpack/
+.next/
+
+# Arquivos de build
+dist/
+build/
+out/ 

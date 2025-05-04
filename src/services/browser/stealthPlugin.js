@@ -13,7 +13,7 @@ const config = require('../../config');
  * BrightData proxy configuration
  * Using residential proxy with port 33335 as required by the new certificate
  */
-const PROXY_CONFIG = {
+const PROXY_CONFIG = config.proxy?.brightData || {
   server: 'brd.superproxy.io:33335',
   username: 'brd-customer-hl_aa4b1775-zone-residential_proxy1',
   password: '15blqlg7ljnm'
@@ -302,17 +302,30 @@ async function applyEnhancedEvasions(page, fingerprint) {
   }
 }
 
-// Create and configure the enhanced stealth plugin
-const enhancedStealthPlugin = createEnhancedStealthPlugin();
-
-// Add method to get proxy settings for browser launch
+/**
+ * Returns proxy settings using configuration from config file or fallback to PROXY_CONFIG
+ * @returns {Object} Proxy configuration for browser launch
+ */
 function getProxySettings() {
+  // Use the Bright Data configuration from config if available
+  if (config.proxy?.brightData?.enabled) {
+    return {
+      server: config.proxy.brightData.server,
+      username: config.proxy.brightData.username,
+      password: config.proxy.brightData.password
+    };
+  }
+  
+  // Fallback to hardcoded PROXY_CONFIG
   return {
     server: PROXY_CONFIG.server,
     username: PROXY_CONFIG.username,
     password: PROXY_CONFIG.password
   };
 }
+
+// Create and configure the enhanced stealth plugin
+const enhancedStealthPlugin = createEnhancedStealthPlugin();
 
 // Export both the stealth plugin and proxy settings
 module.exports = { 

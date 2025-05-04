@@ -44,7 +44,7 @@ module.exports = {
 
   // Proxy configuration
   proxy: {
-    enabled: process.env.USE_PROXIES === 'true',
+    enabled: process.env.USE_PROXIES === 'true' || true, // Habilitamos por padrão já que estamos usando Bright Data
     rotationStrategy: process.env.PROXY_ROTATION_STRATEGY || 'sequential', // 'sequential', 'random', 'performance'
     proxies: process.env.PROXIES ? process.env.PROXIES.split(',').map(p => p.trim()).filter(Boolean) : [],
     proxyFile: process.env.PROXY_FILE || 'Webshare9proxies.txt',
@@ -57,6 +57,15 @@ module.exports = {
     circuitBreakerResetTime: parseInt(process.env.CIRCUIT_BREAKER_RESET_TIME || '300000', 10), // 5 minutes
     domainSpecificTracking: process.env.DOMAIN_SPECIFIC_TRACKING !== 'false',
     preferDomainSpecificProxies: process.env.PREFER_DOMAIN_SPECIFIC_PROXIES !== 'false',
+    // Bright Data proxy configuration
+    brightData: {
+      enabled: true,
+      server: 'brd.superproxy.io:33335',
+      username: 'brd-customer-hl_aa4b1775-zone-residential_proxy1',
+      password: '15blqlg7ljnm',
+      useCertificate: false, // Configurar como true se você precisar usar certificado SSL
+      certPath: process.env.BRIGHTDATA_CERT_PATH || './New SSL certifcate - MUST BE USED WITH PORT 33335/CA.CRT',
+    },
   },
 
   // Email notification configuration
