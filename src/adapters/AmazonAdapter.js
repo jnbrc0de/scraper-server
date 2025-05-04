@@ -402,7 +402,7 @@ class AmazonAdapter extends AbstractAdapter {
             text.includes('indisponível') || 
             text.includes('out of stock') ||
             text.includes('unavailable') ||
-            text.includes('esgotado')) {
+            text.includes('esgotado'))
             return false;
           }
         }
