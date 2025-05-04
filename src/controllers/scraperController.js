@@ -608,105 +608,168 @@ class ScraperController {
         }
       }
       
-      // 6. Run adapter pre-processing
-      await adapter.preProcess(page);
-      
-      // 7. Extract data with the adapter
+      // 6. After handling any blocks or captchas, run the extraction
       logger.debug('Extracting data using adapter', { 
         adapter: adapter.constructor.name, 
-        url,
-        scrapeId: context.id
+        url, 
+        scrapeId: context.id 
       });
       
-      const extractionStartTime = Date.now();
-      const extractionPromise = adapter.extract(page);
-      const extractionTimeoutPromise = new Promise((_, reject) => {
-        const timeout = config.browser.extractionTimeout || 20000; // 20 segundos por padrão
-        setTimeout(() => {
-          reject(new Error(`Data extraction timeout exceeded (${timeout}ms)`));
-        }, timeout);
-      });
+      // Implement retries for extraction with exponential backoff
+      const maxExtractionAttempts = 3;
+      let extractionResult = null;
+      let extractionError = null;
       
-      const extractedData = await Promise.race([extractionPromise, extractionTimeoutPromise]);
-      const extractionDuration = Date.now() - extractionStartTime;
-      
-      logger.debug('Data extraction completed', {
-        url,
-        durationMs: extractionDuration,
-        scrapeId: context.id
-      });
-      
-      // 8. Validate extracted data
-      if (!extractedData || extractedData.price === null || extractedData.price === undefined) {
-        // Take screenshot of the page that failed extraction
-        context.screenshot = path.resolve(
-          process.cwd(), 
-          'screenshots', 
-          `extraction-failed-${context.id}-${Date.now()}.png`
-        );
-        await page.screenshot({ path: context.screenshot });
-        
-        throw new Error('Failed to extract price from page');
-      }
-      
-      // Report successful proxy usage if applicable
-      if (context.proxyUsed) {
-        browserService.reportPageProxyResult(page, true, Date.now() - context.startTime);
-      }
-      
-      return {
-        price: extractedData.price,
-        title: extractedData.title,
-        availability: extractedData.availability,
-        proxyUsed: context.proxyUsed,
-        domain: context.domain
-      };
-    } catch (error) {
-      // Report proxy failure if applicable
-      if (context.proxyUsed) {
-        browserService.reportPageProxyResult(page, false);
-      }
-      
-      // Enhance error object with context for better debugging
-      error.navigationHistory = navigationHistory;
-      error.context = {
-        url,
-        scrapeAttempt: context.attempts,
-        timestamp: Date.now(),
-        scrapeId: context.id
-      };
-      
-      // Add context to the error
-      context.errors.push(error.message);
-      
-      // Take screenshot of error page if not already taken
-      if (!context.screenshot && page) {
+      for (let attempt = 1; attempt <= maxExtractionAttempts; attempt++) {
         try {
-          context.screenshot = path.resolve(
-            process.cwd(), 
-            'screenshots', 
-            `error-${context.id}-${Date.now()}.png`
-          );
-          await page.screenshot({ path: context.screenshot }).catch(() => {});
-        } catch (e) {
-          // Ignore screenshot errors
+          const extractionStartTime = Date.now();
+          
+          // Run the extraction with timeout protection
+          const extractionPromise = adapter.extract(page);
+          const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+              reject(new Error(`Extraction timeout exceeded (${config.adapter.extractionTimeout || 45000}ms)`));
+            }, config.adapter.extractionTimeout || 45000); // 45 segundos timeout padrão
+          });
+          
+          extractionResult = await Promise.race([extractionPromise, timeoutPromise]);
+          const extractionDuration = Date.now() - extractionStartTime;
+          
+          logger.debug('Data extraction completed', { 
+            url, 
+            durationMs: extractionDuration,
+            attempt,
+            success: !!extractionResult,
+            scrapeId: context.id
+          });
+          
+          // Validate extraction result
+          if (!extractionResult || 
+              (extractionResult.price === undefined && extractionResult.price === null)) {
+            throw new Error('Invalid extraction result: missing price');
+          }
+          
+          // Success!
+          context.attempts = attempt;
+          break;
+        } catch (error) {
+          extractionError = error;
+          logger.warn(`Extraction attempt ${attempt} failed`, { 
+            url, 
+            error: error.message,
+            scrapeId: context.id 
+          });
+          
+          // If this is not the last attempt, wait before trying again
+          if (attempt < maxExtractionAttempts) {
+            // Exponential backoff: 2^attempt * 1000ms + small random jitter
+            const backoffTime = (Math.pow(2, attempt) * 1000) + (Math.random() * 1000);
+            logger.debug(`Retrying extraction in ${Math.round(backoffTime)}ms`, { 
+              url,
+              attempt,
+              scrapeId: context.id 
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, backoffTime));
+            
+            // Refresh page before retrying if needed
+            if (error.message.includes('timeout') || error.message.includes('detached')) {
+              logger.debug('Refreshing page before retry', { url, scrapeId: context.id });
+              await page.reload({ waitUntil: 'domcontentloaded' })
+                .catch(e => logger.warn('Page refresh failed', { error: e.message }));
+              
+              // Re-run pre-processing after refresh
+              await adapter.preProcess(page)
+                .catch(e => logger.warn('Pre-processing after refresh failed', { error: e.message }));
+            }
+          }
         }
       }
       
-      throw error;
-    } finally {
-      // Clean up resources
-      if (page) {
-        try {
-          await page.close().catch(() => {});
-        } catch (e) {}
+      // If all extraction attempts failed, throw the last error
+      if (!extractionResult) {
+        if (extractionError) {
+          context.errors.push(extractionError.message);
+          throw extractionError;
+        }
+        throw new Error('Data extraction failed after multiple attempts');
       }
       
-      if (browserContext) {
-        try {
-          await browserContext.close().catch(() => {});
-        } catch (e) {}
+      // Capture a screenshot if configured
+      if (config.screenshots.enabled) {
+        const screenshotsDir = path.resolve(process.cwd(), 'screenshots');
+        await fs.mkdir(screenshotsDir, { recursive: true }).catch(() => {});
+        
+        context.screenshot = path.resolve(
+          screenshotsDir, 
+          `${context.id}-${Date.now()}.png`
+        );
+        
+        await page.screenshot({ 
+          path: context.screenshot,
+          fullPage: config.screenshots.fullPage
+        }).catch(e => {
+          logger.warn('Failed to capture screenshot', { url, error: e.message });
+        });
       }
+      
+      // Report proxy success if used
+      if (context.proxyUsed) {
+        browserService.reportPageProxyResult(page, true, Date.now() - navigationHistory.startTime);
+      }
+      
+      // Extract essential data from result
+      const result = {
+        price: extractionResult.price,
+        title: extractionResult.title || null,
+        availability: extractionResult.availability !== undefined ? 
+                      extractionResult.availability : true,
+        metadata: {
+          adapter: adapter.constructor.name,
+          url: url,
+          domain: context.domain,
+          extractionTime: Date.now() - context.startTime,
+          extracted: Object.keys(extractionResult)
+        }
+      };
+      
+      // Close page to free resources
+      await page.close().catch(() => {});
+      
+      return result;
+    } catch (error) {
+      // Report proxy failure if used
+      if (context.proxyUsed) {
+        browserService.reportPageProxyResult(page, false, Date.now() - navigationHistory.startTime);
+      }
+      
+      // Try to capture error screenshot if configured
+      if (config.screenshots.enabled && config.screenshots.captureOnError) {
+        try {
+          const screenshotsDir = path.resolve(process.cwd(), 'screenshots');
+          await fs.mkdir(screenshotsDir, { recursive: true }).catch(() => {});
+          
+          context.screenshot = path.resolve(
+            screenshotsDir, 
+            `error-${context.id}-${Date.now()}.png`
+          );
+          
+          await page.screenshot({ 
+            path: context.screenshot,
+            fullPage: config.screenshots.fullPage
+          });
+        } catch (screenshotError) {
+          logger.warn('Failed to capture error screenshot', { 
+            url, 
+            error: screenshotError.message
+          });
+        }
+      }
+      
+      // Close page to free resources
+      await page.close().catch(() => {});
+      
+      throw error;
     }
   }
 
