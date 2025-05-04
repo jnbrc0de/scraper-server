@@ -293,9 +293,13 @@ class BrowserService {
       
       // PATCH: Handle missing browser executable & WINDOWS_CHROME_PATCH (merged)
       const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+      // FIX-PLAYWRIGHT
+      const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
       // Set default launch options
       const defaultOptions = {
         headless: config.performance.useHeadlessMode !== false,
+        executablePath: process.env.CHROME_EXECUTABLE_PATH || CHROME_PATH,
+        args: [
         executablePath: process.env.CHROME_EXECUTABLE_PATH || CHROME_PATH,
         args: [
           '--disable-dev-shm-usage',

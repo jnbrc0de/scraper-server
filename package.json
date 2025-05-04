@@ -8,21 +8,8 @@
     "start": "node src/server.js",
     "start:win": "node start-server.js",
     "dev": "nodemon src/server.js",
-    "lint": "eslint src/**/*.js",
-    "format": "prettier --write \"src/**/*.js\"",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "benchmark": "node benchmark.js",
-    "setup-plugins": "node setup-plugin-dependencies.js",
-    "cleanup": "node src/utils/cleanup.js",
-    "fix-dependencies": "node install-dependencies.js",
-    "fix": "node fix-dependencies.js",
-    "fix-browser": "node fix-browser-installation.js",
-    "fix-windows-browser": "node fix-windows-browser.js",
-    "setup-windows": "node setup-windows-environment.js",
-    "install-browsers": "node fix-windows-browser.js",
-    "install-chrome-windows": "node install-chromium.js",
-    "direct-chrome": "node download-chrome.js"
+    "fix-playwright": "node fix-playwright.js",
+    "install-browsers": "node fix-playwright.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
