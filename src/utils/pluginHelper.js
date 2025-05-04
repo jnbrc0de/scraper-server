@@ -64,30 +64,43 @@ module.exports = function() {
     // Patch puppeteer-extra-plugin base class check
     try {
       const PlaywrightExtra = require('playwright-extra');
+      
+      // Ensure PlaywrightExtra.Playwright exists
+      if (!PlaywrightExtra.Playwright) {
+        console.warn('PlaywrightExtra.Playwright not found, skipping prototype patch');
+        return;
+      }
+      
+      // Store original use method if it exists
       const originalUse = PlaywrightExtra.Playwright.prototype.use;
       
-      PlaywrightExtra.Playwright.prototype.use = function(plugin) {
-        // Add missing properties to ensure the plugin is considered valid
-        if (plugin && typeof plugin === 'object') {
-          if (!plugin.name && plugin._name) {
-            plugin.name = plugin._name;
+      // Only patch if originalUse exists
+      if (typeof originalUse === 'function') {
+        PlaywrightExtra.Playwright.prototype.use = function(plugin) {
+          // Add missing properties to ensure the plugin is considered valid
+          if (plugin && typeof plugin === 'object') {
+            if (!plugin.name && plugin._name) {
+              plugin.name = plugin._name;
+            }
+            
+            if (!plugin.name) {
+              plugin.name = 'stealth-plugin';
+            }
+            
+            if (!plugin._isPuppeteerExtraPlugin) {
+              plugin._isPuppeteerExtraPlugin = true;
+            }
+            
+            if (!plugin.requiresLaunchPausePre && typeof plugin.beforeLaunch !== 'function') {
+              plugin.beforeLaunch = async () => {};
+            }
           }
           
-          if (!plugin.name) {
-            plugin.name = 'stealth-plugin';
-          }
-          
-          if (!plugin._isPuppeteerExtraPlugin) {
-            plugin._isPuppeteerExtraPlugin = true;
-          }
-          
-          if (!plugin.requiresLaunchPausePre && typeof plugin.beforeLaunch !== 'function') {
-            plugin.beforeLaunch = async () => {};
-          }
-        }
-        
-        return originalUse.call(this, plugin);
-      };
+          return originalUse.call(this, plugin);
+        };
+      } else {
+        console.warn('Original use method not found on PlaywrightExtra.Playwright.prototype');
+      }
     } catch (e) {
       console.warn('Failed to patch playwright-extra:', e);
     }

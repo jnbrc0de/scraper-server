@@ -11,6 +11,26 @@ const { URL } = require('url');
 const crypto = require('crypto');
 const antiDetection = require('../../utils/antiDetection');
 const os = require('os');
+const path = require('path');
+
+// Browser configuration
+const BROWSER_CONFIG = {
+  CHROME_PATH: process.platform === 'win32' 
+    ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    : process.platform === 'darwin'
+      ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      : "/usr/bin/google-chrome",
+  DEFAULT_ARGS: [
+    '--disable-dev-shm-usage',
+    '--disable-setuid-sandbox',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--disable-accelerated-2d-canvas',
+    '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-blink-features=AutomationControlled'
+  ]
+};
 
 // Plugin is already registered in stealthPlugin.js
 
@@ -27,7 +47,6 @@ class BrowserService {
     
     // Check for antiDetection module and add safe handling of missing getUserAgents
     try {
-      // Add safe handling of the getUserAgents() function
       this.userAgents = typeof antiDetection.getUserAgents === 'function' 
         ? antiDetection.getUserAgents() 
         : getDefaultUserAgents();
@@ -36,23 +55,20 @@ class BrowserService {
       this.userAgents = getDefaultUserAgents();
     }
     
-    this.sessionHeaders = new Map(); // Track headers for consistency
+    this.sessionHeaders = new Map();
     this.browserRotationCounter = 0;
-    this.browserRotationThreshold = config.browser.rotationThreshold || 50; // Rotation after 50 uses
+    this.browserRotationThreshold = config.browser.rotationThreshold || 50;
     this.prewarming = false;
     this.prewarmingPromise = null;
     
-    // Track domain-specific performance metrics
     this.domainPerformance = new Map();
-    this.pageReuseMap = new Map(); // Track page reuse to avoid memory leaks
+    this.pageReuseMap = new Map();
     this.totalPagesCreated = 0;
     this.successfulRequests = 0;
     this.failedRequests = 0;
     
-    // Initialize browser pool
     this._startHealthMonitor();
     
-    // Start prewarming if enabled
     if (config.browser && config.browser.prewarmEnabled) {
       this._startPrewarming();
     }
@@ -70,6 +86,52 @@ class BrowserService {
         freeMemory: `${Math.round(os.freemem() / (1024 * 1024))}MB`
       }
     });
+  }
+
+  /**
+   * Initialize the browser service
+   */
+  async initialize() {
+    try {
+      // Create initial browser instance
+      const browser = await this.getBrowser();
+      
+      // Create a test context to verify everything works
+      const context = await browser.newContext({
+        userAgent: this._getRandomUserAgent(),
+        viewport: { width: 1366, height: 768 },
+        ignoreHTTPSErrors: true
+      });
+      
+      // Create a test page
+      const page = await context.newPage();
+      
+      // Navigate to about:blank to initialize browser fully
+      await page.goto('about:blank', { timeout: 5000 }).catch(() => {});
+      
+      // Close test page and context
+      await page.close().catch(() => {});
+      await context.close().catch(() => {});
+      
+      logger.info('Browser service initialized successfully');
+      return true;
+    } catch (error) {
+      logger.error('Failed to initialize browser service:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Shutdown the browser service
+   */
+  async shutdown() {
+    try {
+      await this.closeAll();
+      logger.info('Browser service shut down successfully');
+    } catch (error) {
+      logger.error('Error shutting down browser service:', error);
+      throw error;
+    }
   }
 
   /**
@@ -217,15 +279,12 @@ class BrowserService {
    */
   async getBrowser(launchOptions = {}) {
     try {
-      // First perform health check
       await this._healthCheck();
       
-      // Wait for prewarming to complete if in progress
       if (this.prewarming && this.prewarmingPromise) {
         await this.prewarmingPromise;
       }
       
-      // Remove disconnected browsers
       this.browsers = this.browsers.filter(browser => {
         const isConnected = browser && browser.isConnected && browser.isConnected();
         if (!isConnected && browser) {
@@ -234,117 +293,45 @@ class BrowserService {
         return isConnected;
       });
       
-      // Check if browser rotation is needed
       const shouldRotate = this.browserRotationCounter >= this.browserRotationThreshold;
       
-      // Reuse existing browser if available and rotation not needed
       if (!shouldRotate && this.browsers.length > 0) {
-        // Sort browsers by usage count (use least used first)
         this.browsers.sort((a, b) => (a._usageCount || 0) - (b._usageCount || 0));
-        
         const browser = this.browsers[0];
         
-        // Check browser age to avoid long-running instances
         const browserAgeMs = Date.now() - (browser._createdAt || Date.now());
         const maxBrowserAgeMs = 3600000; // 1 hour max browser age
         
-        if (browserAgeMs > maxBrowserAgeMs) {
-          logger.info('Replacing aged browser instance', { 
-            ageMs: browserAgeMs,
-            maxAgeMs: maxBrowserAgeMs
-          });
-          
-          // Remove from pool and close
-          this.browsers = this.browsers.filter(b => b !== browser);
-          await browser.close().catch(() => {});
-          
-          // Continue to create a new browser
-        } else {
-          // Update usage counter and return browser
+        if (browserAgeMs < maxBrowserAgeMs) {
           browser._usageCount = (browser._usageCount || 0) + 1;
           this.browserRotationCounter++;
-          
           return browser;
         }
       }
       
-      // If we're rotating browsers, close the most used one
-      if (shouldRotate && this.browsers.length > 0) {
-        // Sort by usage count (descending)
-        this.browsers.sort((a, b) => (b._usageCount || 0) - (a._usageCount || 0));
-        
-        // Close the most used browser
-        try {
-          const oldBrowser = this.browsers[0];
-          logger.info('Rotating browser instance', { 
-            usageCount: oldBrowser._usageCount,
-            ageMs: Date.now() - (oldBrowser._createdAt || Date.now()) 
-          });
-          
-          this.browsers = this.browsers.slice(1);
-          await oldBrowser.close().catch(() => {});
-        } catch (e) {
-          // Ignore errors in rotation
-        }
-        
-        // Reset counter
-        this.browserRotationCounter = 0;
-      }
-      
-      // PATCH: Handle missing browser executable & WINDOWS_CHROME_PATCH (merged)
-      const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-      // FIX-PLAYWRIGHT
-      const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-      // Set default launch options
-      const defaultOptions = {
-        headless: config.performance.useHeadlessMode !== false,
-        executablePath: process.env.CHROME_EXECUTABLE_PATH || CHROME_PATH,
-        args: [
-        executablePath: process.env.CHROME_EXECUTABLE_PATH || CHROME_PATH,
-        args: [
-          '--disable-dev-shm-usage',
-          '--disable-setuid-sandbox',
-          '--no-sandbox',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu',
-          '--disable-infobars',
-          '--window-size=1366,768',
-          '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process',
-          '--disable-web-security',
-          '--disable-javascript-timers-throttling',
-          '--disable-background-timer-throttling',
-          '--disable-backgrounding-occluded-windows'
-        ],
-        chromiumSandbox: false,
-        ignoreHTTPSErrors: true,
-        defaultViewport: null, // Use window size instead of viewport
-        // Add Bright Data proxy configuration
-        proxy: getProxySettings()
+      // Create new browser instance
+      const options = {
+        ...launchOptions,
+        executablePath: BROWSER_CONFIG.CHROME_PATH,
+        args: [...BROWSER_CONFIG.DEFAULT_ARGS, ...(launchOptions.args || [])],
+        headless: true
       };
-
-      // Create new browser instance 
-      const browser = await chromium.launch({
-        ...defaultOptions,
-        ...launchOptions
-      });
+      
+      const browser = await chromium.launch(options);
+      browser._createdAt = Date.now();
+      browser._usageCount = 1;
       
       this.browsers.push(browser);
+      this.browserRotationCounter = 1;
       
-      // Set up closing event to clean up
       browser.on('disconnected', () => {
         this.browsers = this.browsers.filter(b => b !== browser);
         logger.debug('Browser disconnected, removed from pool');
       });
       
-      // Add metadata
-      browser._createdAt = Date.now();
-      browser._usageCount = 1;
-      this.browserRotationCounter++;
-      
       return browser;
     } catch (error) {
-      logger.error('Failed to create browser instance', {}, error);
+      logger.error('Error getting browser instance', {}, error);
       throw error;
     }
   }
@@ -1099,22 +1086,9 @@ function createFixedFingerprint() {
  */
 function getDefaultUserAgents() {
   return [
-    // Chrome on Windows
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    
-    // Chrome on macOS
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    
-    // Firefox on Windows
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   ];
 }
 

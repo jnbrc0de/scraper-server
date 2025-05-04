@@ -41,6 +41,58 @@ class CacheService {
       domains: this.domainSettings.size
     });
   }
+
+  /**
+   * Initialize the cache service
+   * @returns {Promise<void>}
+   */
+  async initialize() {
+    try {
+      if (!this.enabled) {
+        logger.info('Cache service is disabled, skipping initialization test');
+        return true;
+      }
+      // Verifica se o cache está funcionando
+      const testKey = 'test:initialization';
+      const testValue = { timestamp: Date.now() };
+      
+      // Tenta setar e recuperar um valor de teste
+      this.set(testKey, testValue, 60);
+      const retrieved = this.get(testKey);
+      
+      if (!retrieved || retrieved.timestamp !== testValue.timestamp) {
+        throw new Error('Cache initialization test failed');
+      }
+      
+      // Remove o valor de teste
+      this.delete(testKey);
+      
+      logger.info('Cache service initialized successfully');
+      return true;
+    } catch (error) {
+      logger.error('Failed to initialize cache service:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Shutdown the cache service
+   * @returns {Promise<void>}
+   */
+  async shutdown() {
+    try {
+      // Limpa o cache
+      this.flush();
+      
+      // Para o NodeCache
+      this.cache.close();
+      
+      logger.info('Cache service shut down successfully');
+    } catch (error) {
+      logger.error('Error shutting down cache service:', error);
+      throw error;
+    }
+  }
   
   /**
    * Inicializa configurações por domínio

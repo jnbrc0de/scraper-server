@@ -4,12 +4,11 @@
   "description": "High-performance, resilient, and modular web scraping server",
   "type": "commonjs",
   "scripts": {
-    "build": "node ./install-playwright.js",
     "start": "node src/server.js",
-    "start:win": "node start-server.js",
     "dev": "nodemon src/server.js",
-    "fix-playwright": "node fix-playwright.js",
-    "install-browsers": "node fix-playwright.js"
+    "postinstall": "npx playwright install --with-deps chromium",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
