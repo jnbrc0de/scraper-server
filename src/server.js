@@ -5,14 +5,28 @@
 
 // Install required browsers if needed
 const { execSync } = require('child_process');
+
 try {
-  execSync('npx playwright install chromium', { stdio: 'inherit' });
+  // Verifica se já existe a instalação do Chromium antes de tentar instalar
+  console.log('Verificando instalação do Chromium...');
+  const result = execSync('node -e "try { require(\'playwright\').chromium.executablePath(); console.log(\'Chromium já instalado\'); } catch(e) { process.exit(1); }"', { stdio: 'pipe' }).toString();
+  
+  if (result.includes('Chromium já instalado')) {
+    console.log('Chromium já está instalado, pulando instalação');
+  } else {
+    throw new Error('Chromium não encontrado');
+  }
 } catch (e) {
+  console.log('Instalando Chromium...');
   try {
-    execSync('node ./node_modules/playwright/cli.js install chromium', { stdio: 'inherit' });
+    execSync('npx playwright install chromium', { stdio: 'inherit' });
   } catch (e2) {
-    console.error('Playwright browser install failed:', e2.message);
-    process.exit(1);
+    try {
+      execSync('node ./node_modules/playwright/cli.js install chromium', { stdio: 'inherit' });
+    } catch (e3) {
+      console.error('Falha na instalação do Chromium:', e3.message);
+      process.exit(1);
+    }
   }
 }
 
@@ -25,6 +39,8 @@ process.on('warning', (w) => {
 // Import dependencies
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
 const config = require('./config');
 const logger = require('./utils/logger');
 const scraperController = require('./controllers/scraperController');
@@ -36,11 +52,32 @@ const path = require('path');
 
 // Create Express app
 const app = express();
-const port = config.server.port;
+const port = config.server.port || process.env.PORT || 3000;
 
 // Set up middleware
 app.use(cors());
-app.use(express.json());
+app.use(helmet()); // Adiciona headers de segurança
+app.use(compression()); // Comprime as respostas HTTP
+app.use(express.json({ limit: '1mb' }));
+
+// Middleware de log para requisições
+app.use((req, res, next) => {
+  const startTime = Date.now();
+  
+  // Intercepta o método end para registrar o tempo de resposta
+  const originalEnd = res.end;
+  res.end = function() {
+    const responseTime = Date.now() - startTime;
+    logger.info(`${req.method} ${req.originalUrl}`, {
+      statusCode: res.statusCode,
+      responseTime: `${responseTime}ms`,
+      userAgent: req.headers['user-agent']
+    });
+    return originalEnd.apply(this, arguments);
+  };
+  
+  next();
+});
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -49,6 +86,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     version: process.env.npm_package_version || '1.0.0',
     environment: config.server.env,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
     adapters: adapterFactory.getAdapterInfo(),
     cache: {
       enabled: config.cache.enabled,
@@ -252,13 +291,31 @@ async function startServer() {
     await scraperController.initialize();
     
     // Start listening
-    app.listen(port, () => {
+    const server = app.listen(port, () => {
       logger.info(`Scraper server running on port ${port}`);
     });
+    
+    // Configure socket timeout
+    server.timeout = config.server.timeout || 120000; // Default 2 minutes
+    
+    // Enable keep-alive
+    server.keepAliveTimeout = config.server.keepAliveTimeout || 65000; // Default 65 seconds
+    server.headersTimeout = config.server.headersTimeout || 66000; // Keep slightly above keepAliveTimeout
     
     // Handle process exit
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+    
+    // Handle uncaught exceptions
+    process.on('uncaughtException', (error) => {
+      logger.error('Uncaught exception', {}, error);
+      shutdown();
+    });
+    
+    // Handle unhandled promise rejections
+    process.on('unhandledRejection', (reason, promise) => {
+      logger.error('Unhandled promise rejection', { promise }, reason);
+    });
   } catch (error) {
     logger.error('Failed to start server', {}, error);
     process.exit(1);

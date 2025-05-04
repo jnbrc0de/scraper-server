@@ -3,11 +3,16 @@
  * Provides advanced anti-detection measures for browser automation
  * Extends standard evasion with human-like behavior and consistent fingerprinting
  */
-const playwright = require('playwright-extra');
 const { addExtra } = require('playwright-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth')();
+const playwright = require('playwright');
+const chromium = addExtra(playwright.chromium);
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const logger = require('../../utils/logger');
 const config = require('../../config');
+
+// Load plugin helper to ensure dependencies are properly resolved
+const pluginHelper = require('../../utils/pluginHelper');
+pluginHelper.setupPluginDependencyResolution();
 
 /**
  * BrightData proxy configuration
@@ -25,7 +30,7 @@ const PROXY_CONFIG = config.proxy?.brightData || {
  */
 function createEnhancedStealthPlugin() {
   // Start with the base stealth plugin
-  const plugin = StealthPlugin;
+  const plugin = StealthPlugin();
   
   // Store consistent fingerprint data
   const fingerprintData = {
@@ -327,9 +332,13 @@ function getProxySettings() {
 // Create and configure the enhanced stealth plugin
 const enhancedStealthPlugin = createEnhancedStealthPlugin();
 
+// Explicitly apply the plugin to chromium
+chromium.use(enhancedStealthPlugin);
+
 // Export both the stealth plugin and proxy settings
 module.exports = { 
   stealthPlugin: enhancedStealthPlugin,
+  chromium,
   proxyConfig: PROXY_CONFIG,
   getProxySettings 
 }; 

@@ -3,6 +3,9 @@
  * Run this script to start the token harvester as a separate process
  */
 require('dotenv').config();
+// Load plugin helper first to resolve dependencies
+require('./src/utils/pluginHelper');
+
 const harvester = require('./src/services/captcha/tokenHarvester');
 const logger = require('./src/utils/logger');
 

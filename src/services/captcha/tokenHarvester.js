@@ -3,16 +3,22 @@
  * Runs in a separate process to periodically harvest reCAPTCHA tokens
  * for common sites to maintain a ready supply of valid tokens
  */
-const { chromium } = require('playwright-extra');
-const { stealthPlugin, getProxySettings } = require('../browser/stealthPlugin');
+const { addExtra } = require('playwright-extra');
+const playwright = require('playwright');
+const chromium = addExtra(playwright.chromium);
+const StealthPlugin = require('puppeteer-extra-plugin-stealth')();
+const { getProxySettings } = require('../browser/stealthPlugin');
 const logger = require('../../utils/logger');
 const config = require('../../config');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs').promises;
 
-// Register stealth plugin
-chromium.use(stealthPlugin);
+// Register stealth plugin - ensure dependencies are resolved
+chromium.use(StealthPlugin);
+
+// Ensure plugin dependencies are correctly mapped
+const pluginHelper = require('../../utils/pluginHelper');
 
 class TokenHarvester {
   constructor() {

@@ -16,8 +16,91 @@ function setupPluginDependencyResolution() {
       stealthPath = require.resolve('puppeteer-extra-plugin-stealth');
       console.log('Stealth plugin encontrado em:', stealthPath);
     } catch (e) {
-      console.warn('Aviso: puppeteer-extra-plugin-stealth não encontrado. Os recursos de evasão podem não funcionar corretamente.');
-      return;
+      try {
+        // Try alternate resolution method - look directly in node_modules
+        const potentialPath = path.join(__dirname, '..', '..', 'node_modules', 'puppeteer-extra-plugin-stealth', 'index.js');
+        if (existsSync(potentialPath)) {
+          stealthPath = potentialPath;
+          console.log('Stealth plugin encontrado (método alternativo) em:', stealthPath);
+        } else {
+          console.warn('Aviso: puppeteer-extra-plugin-stealth não encontrado. Os recursos de evasão podem não funcionar corretamente.');
+          return;
+        }
+      } catch (e2) {
+        console.warn('Aviso: puppeteer-extra-plugin-stealth não encontrado. Os recursos de evasão podem não funcionar corretamente.');
+        return;
+      }
+    }
+    
+    // Diretamente criar/copiar evasions para corrigir o problema de dependência
+    try {
+      const evasionsPath = path.join(path.dirname(stealthPath), 'evasions');
+      const stealthDirPath = path.join(path.dirname(path.dirname(stealthPath)), 'stealth');
+      const stealthEvasionsPath = path.join(stealthDirPath, 'evasions');
+      
+      // Verificar se o diretório de evasões existe
+      if (existsSync(evasionsPath)) {
+        // Criar diretórios stealth/evasions se não existirem
+        if (!existsSync(stealthDirPath)) {
+          require('fs').mkdirSync(stealthDirPath, { recursive: true });
+        }
+        
+        if (!existsSync(stealthEvasionsPath)) {
+          require('fs').mkdirSync(stealthEvasionsPath, { recursive: true });
+        }
+        
+        // Lista de arquivos de evasão comuns
+        const evasionFiles = [
+          'chrome.app',
+          'chrome.csi',
+          'chrome.loadTimes',
+          'chrome.runtime',
+          'chrome.webgl', // O principal que causa problemas
+          'defaultArgs',
+          'iframe.contentWindow',
+          'media.codecs',
+          'navigator.hardwareConcurrency',
+          'navigator.languages',
+          'navigator.permissions',
+          'navigator.plugins',
+          'navigator.vendor',
+          'navigator.webdriver',
+          'sourceurl',
+          'user-agent-override',
+          'webgl.vendor',
+          'window.outerdimensions'
+        ];
+        
+        // Copiar/criar link para cada arquivo
+        for (const file of evasionFiles) {
+          const sourcePath = path.join(evasionsPath, file + '.js');
+          const targetPath = path.join(stealthEvasionsPath, file + '.js');
+          
+          if (existsSync(sourcePath) && !existsSync(targetPath)) {
+            try {
+              // No Windows, copiar o arquivo em vez de criar link simbólico
+              if (process.platform === 'win32') {
+                require('fs').copyFileSync(sourcePath, targetPath);
+              } else {
+                // Em sistemas Unix, criar link simbólico
+                require('fs').symlinkSync(sourcePath, targetPath);
+              }
+              console.log(`Criado link/cópia para ${file}.js`);
+            } catch (linkErr) {
+              console.warn(`Não foi possível criar link para ${file}.js:`, linkErr.message);
+              // Tentar cópia direta como fallback
+              try {
+                require('fs').copyFileSync(sourcePath, targetPath);
+                console.log(`Copiado ${file}.js como fallback`);
+              } catch (copyErr) {
+                console.warn(`Também não foi possível copiar ${file}.js:`, copyErr.message);
+              }
+            }
+          }
+        }
+      }
+    } catch (fileErr) {
+      console.warn('Erro ao configurar arquivos de evasão:', fileErr.message);
     }
     
     // Configurar resolução de dependências para o playwright-extra
@@ -49,8 +132,22 @@ function setupPluginDependencyResolution() {
             'stealth/evasions/sourceurl': path.join(path.dirname(stealthPath), 'evasions', 'sourceurl'),
             'stealth/evasions/user-agent-override': path.join(path.dirname(stealthPath), 'evasions', 'user-agent-override'),
             'stealth/evasions/webgl.vendor': path.join(path.dirname(stealthPath), 'evasions', 'webgl.vendor'),
-            'stealth/evasions/window.outerdimensions': path.join(path.dirname(stealthPath), 'evasions', 'window.outerdimensions')
+            'stealth/evasions/window.outerdimensions': path.join(path.dirname(stealthPath), 'evasions', 'window.outerdimensions'),
           };
+          
+          // Garantir que todos os caminhos existem
+          for (const [key, depPath] of Object.entries(dependencyMap)) {
+            if (!existsSync(depPath + '.js')) {
+              console.warn(`Aviso: Caminho de dependência inválido: ${depPath}.js`);
+              
+              // Tentar encontrar o arquivo em um caminho alternativo
+              const altPath = path.join(path.dirname(path.dirname(stealthPath)), key + '.js');
+              if (existsSync(altPath)) {
+                dependencyMap[key] = altPath.replace(/\.js$/, '');
+                console.log(`Usando caminho alternativo para ${key}: ${altPath}`);
+              }
+            }
+          }
           
           // Monkey-patch o require para interceptar chamadas a estas dependências
           const originalRequire = module.constructor.prototype.require;
@@ -94,6 +191,13 @@ function setupPluginDependencyResolution() {
           if (dependencyMap[name] && existsSync(dependencyMap[name] + '.js')) {
             console.log(`Resolvendo dependência: ${name} -> ${dependencyMap[name]}`);
             return require(dependencyMap[name]);
+          }
+          
+          // Tentar resolver diretamente no diretório stealth/evasions
+          const alternativePath = path.join(path.dirname(path.dirname(stealthPath)), name);
+          if (existsSync(alternativePath + '.js')) {
+            console.log(`Resolvendo dependência (caminho alternativo): ${name} -> ${alternativePath}`);
+            return require(alternativePath);
           }
           
           // Tentar resolver normalmente se não for encontrado no mapa

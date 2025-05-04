@@ -6,44 +6,104 @@ const logger = require('../utils/logger');
 const config = require('../config');
 const { withRetry } = require('../utils/retry');
 const browserService = require('../services/browser/browserService');
-// Temporarily commented out services to debug
-// const captchaService = require('../services/captcha/captchaService');
+// Carrega os serviços de forma condicional para melhorar a performance
+const captchaService = require('../services/captcha/captchaService');
 const proxyManager = require('../services/proxy/proxyManager');
 const cacheService = require('../services/cache/cacheService');
 const adapterFactory = require('../adapters/AdapterFactory');
-// const emailService = require('../services/notification/emailService');
-// const supabaseService = require('../services/database/supabaseService');
 const TaskQueue = require('../services/queue/taskQueue');
 const fs = require('fs').promises;
 const path = require('path');
+const crypto = require('crypto');
 
-// Create mockup services to prevent errors
-const captchaService = {
-  solveRecaptchaV2: async () => ({ token: 'mock-token' }),
-  solveImageCaptcha: async () => 'mock-solution',
-  getHarvestedToken: () => null,
-  submitForManualResolution: async () => ({ id: 'mock-id' }),
-  checkManualSolution: () => null
-};
+// Tentativa de carregar serviços opcionais
+let emailService = null;
+let supabaseService = null;
 
-const emailService = {
-  enabled: false,
-  sendFailureNotification: async () => {},
-  sendSuccessNotification: async () => {}
-};
+try {
+  emailService = require('../services/notification/emailService');
+} catch (e) {
+  // Fallback para serviço de email mock
+  emailService = {
+    enabled: false,
+    sendFailureNotification: async () => {},
+    sendSuccessNotification: async () => {}
+  };
+  logger.info('Email service not available, using mock');
+}
 
-const supabaseService = {
-  isInitialized: () => false,
-  initialize: () => {},
-  upsertScrapeCache: async () => {},
-  logScraperSuccess: async () => {},
-  logScraperError: async () => {}
-};
+try {
+  supabaseService = require('../services/database/supabaseService');
+} catch (e) {
+  // Fallback para serviço de database mock
+  supabaseService = {
+    isInitialized: () => false,
+    initialize: () => {},
+    upsertScrapeCache: async () => {},
+    logScraperSuccess: async () => {},
+    logScraperError: async () => {},
+    getCachedScrape: async () => null
+  };
+  logger.info('Database service not available, using mock');
+}
 
 class ScraperController {
   constructor() {
     this.initialized = false;
     this.initializePromise = null;
+    this.activeScrapeTasks = new Set();
+    this.totalScrapesCompleted = 0;
+    this.lastMemoryCheck = Date.now();
+    this.memoryCheckInterval = 60000; // 1 minuto
+    this.memoryLimit = config.browser.memoryLimitMB || 2048; // 2GB default
+    this.setupMemoryMonitoring();
+  }
+
+  /**
+   * Configura monitoramento de memória para evitar vazamentos
+   */
+  setupMemoryMonitoring() {
+    setInterval(() => {
+      try {
+        this.checkMemoryUsage();
+      } catch (error) {
+        logger.error('Error in memory monitoring', {}, error);
+      }
+    }, this.memoryCheckInterval);
+  }
+
+  /**
+   * Verifica e gerencia o uso de memória
+   */
+  checkMemoryUsage() {
+    const memoryUsage = process.memoryUsage();
+    const usedMemoryMB = Math.round(memoryUsage.rss / 1024 / 1024);
+    
+    logger.debug('Memory usage check', {
+      usedMemoryMB,
+      heapUsedMB: Math.round(memoryUsage.heapUsed / 1024 / 1024),
+      activeScrapeTasks: this.activeScrapeTasks.size,
+      totalCompleted: this.totalScrapesCompleted
+    });
+    
+    // Se memoria estiver acima do limite, força coleta de lixo e libera recursos
+    if (usedMemoryMB > this.memoryLimit) {
+      logger.warn('Memory usage exceeded limit, releasing resources', {
+        usedMemoryMB,
+        limit: this.memoryLimit
+      });
+      
+      // Force garbage collection if available (node --expose-gc)
+      if (global.gc) {
+        logger.info('Running garbage collection');
+        global.gc();
+      }
+      
+      // Fecha recursos do browser para liberar memória
+      browserService.closeAll().catch(e => 
+        logger.error('Error closing browsers during memory cleanup', {}, e)
+      );
+    }
   }
 
   /**
@@ -70,11 +130,15 @@ class ScraperController {
         const screenshotsDir = path.resolve(process.cwd(), 'screenshots');
         await fs.mkdir(screenshotsDir, { recursive: true }).catch(() => {});
         
+        // Create captchas directory if it doesn't exist
+        const captchasDir = path.resolve(process.cwd(), 'captchas');
+        await fs.mkdir(captchasDir, { recursive: true }).catch(() => {});
+        
         // Initialize proxy manager
         await proxyManager.initialize();
         
         // Initialize Supabase
-        if (config.database.supabaseUrl && config.database.supabaseAnonKey) {
+        if (supabaseService && config.database.supabaseUrl && config.database.supabaseAnonKey) {
           supabaseService.initialize();
         }
         
@@ -102,8 +166,12 @@ class ScraperController {
       await this.initialize();
     }
     
+    // Gera um ID único para esta tarefa de scraping
+    const scrapeId = crypto.randomBytes(8).toString('hex');
+    
     const startTime = Date.now();
     const scrapeContext = {
+      id: scrapeId,
       url,
       startTime,
       success: false,
@@ -114,7 +182,10 @@ class ScraperController {
       errors: []
     };
     
-    logger.info('Starting price scraping', { url });
+    // Registra esta tarefa como ativa
+    this.activeScrapeTasks.add(scrapeId);
+    
+    logger.info('Starting price scraping', { url, scrapeId });
     
     try {
       // 1. Check cache first
@@ -124,15 +195,22 @@ class ScraperController {
           logger.info('Returning cached price data', { 
             url, 
             price: cachedData.price,
-            age: Math.round((Date.now() - new Date(cachedData.scraped_at).getTime()) / 1000) + 's'
+            age: Math.round((Date.now() - new Date(cachedData.scraped_at).getTime()) / 1000) + 's',
+            scrapeId
           });
+          
+          // Remove dos jobs ativos e incrementa contador
+          this.activeScrapeTasks.delete(scrapeId);
+          this.totalScrapesCompleted++;
           
           return {
             success: true,
             cached: true,
             price: cachedData.price,
             title: cachedData.title || null,
-            url
+            availability: cachedData.availability,
+            url,
+            scrapeId
           };
         }
       }
@@ -144,8 +222,16 @@ class ScraperController {
         throw error;
       }
       
+      // Adiciona timeout global para evitar que a operação fique presa
+      const timeoutPromise = new Promise((_, reject) => {
+        const timeout = config.browser.globalScrapeTimeout || 60000; // 1 minuto por padrão
+        setTimeout(() => {
+          reject(new Error(`Global scrape timeout exceeded (${timeout}ms)`));
+        }, timeout);
+      });
+      
       // 3. Perform the scraping with retry logic
-      const result = await withRetry(
+      const scrapePromise = withRetry(
         async (attempt) => {
           scrapeContext.attempts = attempt + 1;
           return this._performScrape(url, adapter, scrapeContext);
@@ -154,16 +240,20 @@ class ScraperController {
           retries: config.browser.retries,
           baseDelay: config.browser.baseRetryDelay,
           operationName: 'Scraping price',
-          context: { url }
+          context: { url, scrapeId }
         }
       );
+      
+      // Espera o scrape ou o timeout, o que vier primeiro
+      const result = await Promise.race([scrapePromise, timeoutPromise]);
       
       // 4. Record success and save to cache
       const duration = Date.now() - startTime;
       logger.info('Successfully scraped price', { 
         url, 
         price: result.price,
-        duration: `${duration}ms` 
+        duration: `${duration}ms`,
+        scrapeId
       });
       
       // Store in database cache
@@ -172,6 +262,7 @@ class ScraperController {
           url,
           price: result.price,
           title: result.title,
+          availability: result.availability,
           cached: false
         });
         
@@ -191,11 +282,16 @@ class ScraperController {
           cacheService.set(cacheKey, {
             price: result.price,
             title: result.title,
+            availability: result.availability,
             cached: false,
             scraped_at: new Date().toISOString()
           });
         }
       }
+      
+      // Incrementa contador e libera a tarefa
+      this.activeScrapeTasks.delete(scrapeId);
+      this.totalScrapesCompleted++;
       
       return {
         success: true,
@@ -203,14 +299,17 @@ class ScraperController {
         price: result.price,
         title: result.title,
         availability: result.availability,
-        url
+        url,
+        scrapeId,
+        durationMs: duration
       };
     } catch (error) {
       const duration = Date.now() - startTime;
       logger.error('Failed to scrape price', { 
         url, 
         attempts: scrapeContext.attempts,
-        duration: `${duration}ms` 
+        duration: `${duration}ms`,
+        scrapeId
       }, error);
       
       // Log error to database
@@ -231,11 +330,17 @@ class ScraperController {
         });
       }
       
+      // Limpa a tarefa do registro
+      this.activeScrapeTasks.delete(scrapeId);
+      this.totalScrapesCompleted++;
+      
       return {
         success: false,
         cached: false,
         error: error.message,
-        url
+        url,
+        scrapeId,
+        durationMs: duration
       };
     }
   }
@@ -256,10 +361,29 @@ class ScraperController {
       return [];
     }
     
-    const queue = new TaskQueue(concurrency);
+    // Limita a concorrência baseado na memória disponível
+    const memoryUsage = process.memoryUsage();
+    const usedMemoryMB = Math.round(memoryUsage.rss / 1024 / 1024);
+    const maxConcurrencyByMemory = Math.max(
+      1, 
+      Math.floor((this.memoryLimit - usedMemoryMB) / 200) // Estima ~200MB por processo
+    );
+    
+    // Ajusta a concorrência se necessário
+    const adjustedConcurrency = Math.min(concurrency, maxConcurrencyByMemory);
+    if (adjustedConcurrency < concurrency) {
+      logger.warn('Adjusting concurrency due to memory constraints', {
+        requested: concurrency,
+        adjusted: adjustedConcurrency,
+        memoryUsedMB: usedMemoryMB,
+        memoryLimitMB: this.memoryLimit
+      });
+    }
+    
+    const queue = new TaskQueue(adjustedConcurrency);
     const startTime = Date.now();
     
-    logger.info(`Starting batch scrape of ${urls.length} URLs with concurrency ${concurrency}`);
+    logger.info(`Starting batch scrape of ${urls.length} URLs with concurrency ${adjustedConcurrency}`);
     
     // Create task functions for each URL
     const tasks = urls.map(url => async () => {
@@ -311,8 +435,18 @@ class ScraperController {
     
     try {
       // 1. Get optimized page for the target URL (includes browser and context)
-      logger.debug('Getting optimized page for URL', { url });
-      page = await browserService.getOptimizedPage(url);
+      logger.debug('Getting optimized page for URL', { url, scrapeId: context.id });
+      
+      // Adiciona timeout para a obtenção da página
+      const pagePromise = browserService.getOptimizedPage(url);
+      const timeoutPromise = new Promise((_, reject) => {
+        const timeout = config.browser.pageCreationTimeout || 30000; // 30 segundos por padrão
+        setTimeout(() => {
+          reject(new Error(`Page creation timeout exceeded (${timeout}ms)`));
+        }, timeout);
+      });
+      
+      page = await Promise.race([pagePromise, timeoutPromise]);
       
       // 2. Track proxy used (if any)
       if (page._proxyUrl) {
@@ -320,9 +454,14 @@ class ScraperController {
         context.domain = page._domain || new URL(url).hostname;
         logger.debug('Using proxy for domain', { 
           proxy: context.proxyUsed, 
-          domain: context.domain 
+          domain: context.domain,
+          scrapeId: context.id
         });
       }
+      
+      // Define limites de timeout para os recursos
+      await page.setDefaultNavigationTimeout(config.browser.defaultNavigationTimeout || 30000);
+      await page.setDefaultTimeout(config.browser.defaultElementTimeout || 10000);
       
       // Set up request monitoring for predictive captcha detection
       await page.route('**/*', async (route) => {
@@ -333,20 +472,45 @@ class ScraperController {
       });
       
       // 3. Navigate to URL with timeout
-      logger.debug('Navigating to URL', { url });
+      logger.debug('Navigating to URL', { url, scrapeId: context.id });
       
       const navStartTime = Date.now();
       
-      await page.goto(url, { 
-        waitUntil: 'domcontentloaded',
-        timeout: config.browser.defaultNavigationTimeout
-      });
+      try {
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: config.browser.defaultNavigationTimeout || 30000
+        });
+      } catch (navigationError) {
+        // Tentativa de recuperação se a página estiver parcialmente carregada
+        if (navigationError.message.includes('timeout')) {
+          logger.warn('Navigation timeout, attempting to continue with partially loaded page', { 
+            url, 
+            scrapeId: context.id
+          });
+          
+          // Verifica se a página carregou o mínimo necessário
+          const isPageUsable = await page.evaluate(() => {
+            return document.body && document.body.innerHTML.length > 0;
+          }).catch(() => false);
+          
+          if (!isPageUsable) {
+            throw navigationError; // Realmente não conseguiu carregar
+          }
+          
+          // Senão continua com o que temos
+          logger.info('Continuing with partially loaded page', { url, scrapeId: context.id });
+        } else {
+          throw navigationError;
+        }
+      }
       
       const navDuration = Date.now() - navStartTime;
       logger.debug('Navigation completed', { 
         url, 
         durationMs: navDuration,
-        requests: navigationHistory.requestCount
+        requests: navigationHistory.requestCount,
+        scrapeId: context.id
       });
       
       // 4. Check for predictive captcha patterns before actual detection
@@ -354,12 +518,12 @@ class ScraperController {
         const predictedCaptcha = await captchaService.predictCaptcha(page, navigationHistory);
         if (predictedCaptcha) {
           logger.info('Predictive captcha detection triggered, performing preemptive solving', 
-            { url, requestCount: navigationHistory.requestCount });
+            { url, requestCount: navigationHistory.requestCount, scrapeId: context.id });
             
           // Try to preemptively solve potential captcha
           const solved = await captchaService.solveWithExternalService(page);
           if (solved) {
-            logger.info('Preemptively solved captcha successfully', { url });
+            logger.info('Preemptively solved captcha successfully', { url, scrapeId: context.id });
           }
         }
       }
@@ -367,12 +531,12 @@ class ScraperController {
       // 5. Check for blocks or captchas
       const blocked = await adapter.isBlocked(page);
       if (blocked) {
-        logger.warn('Page appears to be blocked, checking for captcha', { url });
+        logger.warn('Page appears to be blocked, checking for captcha', { url, scrapeId: context.id });
         
         // Check for captcha
         const hasCaptcha = await captchaService.detectCaptcha(page);
         if (hasCaptcha) {
-          logger.warn('Captcha detected, attempting to solve', { url });
+          logger.warn('Captcha detected, attempting to solve', { url, scrapeId: context.id });
           
           // Try to bypass captcha
           let bypassSuccessful = false;
@@ -387,16 +551,19 @@ class ScraperController {
           
           // If still not successful and manual resolution is enabled, save for human resolution
           if (!bypassSuccessful && config.captcha.manualResolutionEnabled) {
+            const captchaDir = path.resolve(process.cwd(), 'captchas');
+            await fs.mkdir(captchaDir, { recursive: true }).catch(() => {});
+            
             context.screenshot = path.resolve(
-              process.cwd(), 
-              'captchas', 
-              `manual-${Date.now()}.png`
+              captchaDir, 
+              `manual-${context.id}-${Date.now()}.png`
             );
             await page.screenshot({ path: context.screenshot });
             
             logger.info('Captcha saved for manual resolution', { 
               url, 
-              screenshot: context.screenshot 
+              screenshot: context.screenshot,
+              scrapeId: context.id
             });
             
             // Report proxy failure if captcha could not be bypassed
@@ -412,7 +579,7 @@ class ScraperController {
             context.screenshot = path.resolve(
               process.cwd(), 
               'screenshots', 
-              `captcha-${Date.now()}.png`
+              `captcha-${context.id}-${Date.now()}.png`
             );
             await page.screenshot({ path: context.screenshot });
             
@@ -428,7 +595,7 @@ class ScraperController {
           context.screenshot = path.resolve(
             process.cwd(), 
             'screenshots', 
-            `blocked-${Date.now()}.png`
+            `blocked-${context.id}-${Date.now()}.png`
           );
           await page.screenshot({ path: context.screenshot });
           
@@ -447,16 +614,26 @@ class ScraperController {
       // 7. Extract data with the adapter
       logger.debug('Extracting data using adapter', { 
         adapter: adapter.constructor.name, 
-        url 
+        url,
+        scrapeId: context.id
       });
       
       const extractionStartTime = Date.now();
-      const extractedData = await adapter.extract(page);
+      const extractionPromise = adapter.extract(page);
+      const extractionTimeoutPromise = new Promise((_, reject) => {
+        const timeout = config.browser.extractionTimeout || 20000; // 20 segundos por padrão
+        setTimeout(() => {
+          reject(new Error(`Data extraction timeout exceeded (${timeout}ms)`));
+        }, timeout);
+      });
+      
+      const extractedData = await Promise.race([extractionPromise, extractionTimeoutPromise]);
       const extractionDuration = Date.now() - extractionStartTime;
       
       logger.debug('Data extraction completed', {
         url,
-        durationMs: extractionDuration
+        durationMs: extractionDuration,
+        scrapeId: context.id
       });
       
       // 8. Validate extracted data
@@ -465,7 +642,7 @@ class ScraperController {
         context.screenshot = path.resolve(
           process.cwd(), 
           'screenshots', 
-          `extraction-failed-${Date.now()}.png`
+          `extraction-failed-${context.id}-${Date.now()}.png`
         );
         await page.screenshot({ path: context.screenshot });
         
@@ -495,7 +672,8 @@ class ScraperController {
       error.context = {
         url,
         scrapeAttempt: context.attempts,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        scrapeId: context.id
       };
       
       // Add context to the error
@@ -507,9 +685,9 @@ class ScraperController {
           context.screenshot = path.resolve(
             process.cwd(), 
             'screenshots', 
-            `error-${Date.now()}.png`
+            `error-${context.id}-${Date.now()}.png`
           );
-          await page.screenshot({ path: context.screenshot });
+          await page.screenshot({ path: context.screenshot }).catch(() => {});
         } catch (e) {
           // Ignore screenshot errors
         }
@@ -557,6 +735,19 @@ class ScraperController {
   }
 
   /**
+   * Retorna estatísticas do scraper controller
+   * @returns {Object} - Estatísticas
+   */
+  getStats() {
+    return {
+      activeScrapeTasks: this.activeScrapeTasks.size,
+      totalScrapesCompleted: this.totalScrapesCompleted,
+      memoryUsageMB: Math.round(process.memoryUsage().rss / 1024 / 1024),
+      uptime: process.uptime()
+    };
+  }
+
+  /**
    * Gracefully shut down the scraper and clean up resources
    * @returns {Promise<void>}
    */
@@ -567,9 +758,62 @@ class ScraperController {
       // Close all browser instances
       await browserService.closeAll();
       
+      // Clean temporary files if needed
+      this.cleanupTempFiles().catch(e => 
+        logger.warn('Error cleaning up temporary files', {}, e)
+      );
+      
       logger.info('Scraper controller shut down successfully');
     } catch (error) {
       logger.error('Error shutting down scraper controller', {}, error);
+    }
+  }
+  
+  /**
+   * Limpa arquivos temporários antigos (screenshots, logs, etc)
+   */
+  async cleanupTempFiles() {
+    try {
+      const now = Date.now();
+      const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 dias
+      
+      // Limpa screenshots antigos
+      const screenshotsDir = path.resolve(process.cwd(), 'screenshots');
+      const screenshots = await fs.readdir(screenshotsDir);
+      
+      for (const file of screenshots) {
+        try {
+          const filePath = path.join(screenshotsDir, file);
+          const stats = await fs.stat(filePath);
+          
+          if (now - stats.mtime.getTime() > maxAge) {
+            await fs.unlink(filePath);
+          }
+        } catch (e) {
+          // Ignora erros individuais
+        }
+      }
+      
+      // Limpa captchas antigos
+      const captchasDir = path.resolve(process.cwd(), 'captchas');
+      const captchas = await fs.readdir(captchasDir);
+      
+      for (const file of captchas) {
+        try {
+          const filePath = path.join(captchasDir, file);
+          const stats = await fs.stat(filePath);
+          
+          if (now - stats.mtime.getTime() > maxAge) {
+            await fs.unlink(filePath);
+          }
+        } catch (e) {
+          // Ignora erros individuais
+        }
+      }
+      
+      logger.info('Temporary files cleanup completed');
+    } catch (error) {
+      logger.error('Error during temporary files cleanup', {}, error);
     }
   }
 }

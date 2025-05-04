@@ -2,17 +2,16 @@
  * Browser Service
  * Manages browser instances with health monitoring and resource optimization
  */
-const playwright = require('playwright-extra');
+const { chromium } = require('../browser/stealthPlugin');
 const logger = require('../../utils/logger');
 const config = require('../../config');
 const proxyManager = require('../proxy/proxyManager');
-const { stealthPlugin, proxyConfig, getProxySettings } = require('./stealthPlugin');
+const { getProxySettings } = require('./stealthPlugin');
 const { URL } = require('url');
 const crypto = require('crypto');
 const antiDetection = require('../../utils/antiDetection');
 
-// Register stealth plugin
-playwright.chromium.use(stealthPlugin);
+// Plugin is already registered in stealthPlugin.js
 
 class BrowserService {
   constructor() {
@@ -92,7 +91,7 @@ class BrowserService {
         for (let i = 0; i < browsersToCreate; i++) {
           try {
             // Launch with minimal options
-            const browser = await playwright.chromium.launch({
+            const browser = await chromium.launch({
               headless: true,
               args: [
                 '--disable-dev-shm-usage',
@@ -229,7 +228,7 @@ class BrowserService {
       };
       
       // Create new browser instance
-      const browser = await playwright.chromium.launch({
+      const browser = await chromium.launch({
         ...defaultOptions,
         ...launchOptions
       });
@@ -751,7 +750,7 @@ class BrowserService {
   async createIsolatedContext(contextOptions = {}) {
     try {
       // Always create a new browser instance for full isolation
-      const browser = await playwright.chromium.launch({
+      const browser = await chromium.launch({
         headless: true,
         args: [
           '--disable-dev-shm-usage',
