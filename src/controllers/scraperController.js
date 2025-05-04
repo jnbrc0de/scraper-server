@@ -216,10 +216,16 @@ class ScraperController {
       }
       
       // 2. Check if we have an adapter for this URL
-      const adapter = adapterFactory.getAdapter(url);
+      let adapter = adapterFactory.getAdapter(url);
       if (!adapter) {
-        const error = new Error(`No adapter found for URL: ${url}`);
-        throw error;
+        // Use generic adapter as fallback if enabled
+        if (config.adapter.useGenericFallback) {
+          adapter = adapterFactory.genericAdapter;
+          logger.info('No specific adapter found, using generic adapter as fallback', { url, scrapeId });
+        } else {
+          const error = new Error(`No adapter found for URL: ${url}`);
+          throw error;
+        }
       }
       
       // Adiciona timeout global para evitar que a operação fique presa
@@ -234,7 +240,37 @@ class ScraperController {
       const scrapePromise = withRetry(
         async (attempt) => {
           scrapeContext.attempts = attempt + 1;
-          return this._performScrape(url, adapter, scrapeContext);
+          
+          try {
+            // Try with the primary adapter
+            return await this._performScrape(url, adapter, scrapeContext);
+          } catch (error) {
+            // If primary adapter fails and we're not already using generic adapter,
+            // try with generic adapter if enabled
+            if (config.adapter.useGenericFallback && 
+                adapter.constructor.name !== 'GenericAdapter' &&
+                adapterFactory.genericAdapter) {
+              
+              logger.info('Primary adapter failed, trying with generic adapter', { 
+                url, 
+                primaryAdapter: adapter.constructor.name,
+                error: error.message,
+                scrapeId 
+              });
+              
+              // Create a new context for the generic attempt
+              const genericContext = {
+                ...scrapeContext,
+                usingGenericFallback: true
+              };
+              
+              // Try with generic adapter
+              return await this._performScrape(url, adapterFactory.genericAdapter, genericContext);
+            }
+            
+            // If we can't use generic adapter or it also failed, rethrow
+            throw error;
+          }
         },
         {
           retries: config.browser.retries,
@@ -284,6 +320,7 @@ class ScraperController {
             title: result.title,
             availability: result.availability,
             cached: false,
+            success: true,
             scraped_at: new Date().toISOString()
           });
         }
@@ -311,6 +348,51 @@ class ScraperController {
         duration: `${duration}ms`,
         scrapeId
       }, error);
+      
+      // Try to use cached data as fallback if enabled
+      if (config.resilience && config.resilience.fallbackToCachedOnError && config.cache.enabled) {
+        try {
+          logger.info('Attempting to use cached data as fallback after error', { url, scrapeId });
+          const cachedData = await this._checkCache(url, true); // true = allow expired cache
+          
+          if (cachedData && cachedData.price) {
+            logger.info('Using expired cache as fallback after error', { 
+              url, 
+              cachedPrice: cachedData.price,
+              scrapeId 
+            });
+            
+            // Log cache fallback in database
+            if (supabaseService.isInitialized()) {
+              await supabaseService.logScraperError({
+                url,
+                error: `${error.message} (used cache fallback)`,
+                proxyUsed: scrapeContext.proxyUsed,
+                cachedFallback: true
+              });
+            }
+            
+            // Limpa a tarefa do registro
+            this.activeScrapeTasks.delete(scrapeId);
+            this.totalScrapesCompleted++;
+            
+            return {
+              success: true,
+              cached: true,
+              fallback: true,
+              price: cachedData.price,
+              title: cachedData.title || null,
+              availability: cachedData.availability,
+              url,
+              scrapeId,
+              durationMs: duration,
+              error: error.message // Include original error for reference
+            };
+          }
+        } catch (cacheError) {
+          logger.warn('Failed to retrieve cache fallback', { url, scrapeId }, cacheError);
+        }
+      }
       
       // Log error to database
       if (supabaseService.isInitialized()) {
@@ -616,7 +698,7 @@ class ScraperController {
       });
       
       // Implement retries for extraction with exponential backoff
-      const maxExtractionAttempts = 3;
+      const maxExtractionAttempts = config.adapter.maxExtractionRetries || 3;
       let extractionResult = null;
       let extractionError = null;
       
@@ -776,22 +858,75 @@ class ScraperController {
   /**
    * Check if a result is available in cache
    * @param {string} url - URL to check cache for
+   * @param {boolean} [allowExpired=false] - Allow returning expired cache (for fallback)
    * @returns {Promise<Object|null>} - Cached data or null
    * @private
    */
-  async _checkCache(url) {
+  async _checkCache(url, allowExpired = false) {
     // First check memory cache
     const cacheKey = cacheService.createKey('price', url);
     if (cacheKey) {
       const memCache = cacheService.get(cacheKey);
       if (memCache) {
+        // Verificar se o cache é válido (não contém erro)
+        if (config.adapter && config.adapter.returnOnlyValidCache) {
+          if (memCache.success === false || !memCache.price) {
+            logger.debug('Ignoring invalid cache entry', { url });
+            return null;
+          }
+        }
+        
+        // Verificar se o cache não está expirado
+        const now = Date.now();
+        const cacheTime = new Date(memCache.scraped_at).getTime();
+        const maxAge = config.cache.ttl * 1000;
+        
+        if (!allowExpired && now - cacheTime > maxAge) {
+          logger.debug('Cache entry expired', { 
+            url, 
+            age: Math.round((now - cacheTime) / 1000) + 's', 
+            maxAge: maxAge / 1000 + 's' 
+          });
+          return null;
+        }
+        
         return memCache;
       }
     }
     
     // Then check database cache
-    if (supabaseService.isInitialized()) {
-      return await supabaseService.getCachedScrape(url);
+    if (supabaseService && supabaseService.isInitialized()) {
+      const dbCache = await supabaseService.getCachedScrape(url);
+      if (dbCache) {
+        // Verificar se o cache é válido (não contém erro)
+        if (config.adapter && config.adapter.returnOnlyValidCache) {
+          if (dbCache.success === false || !dbCache.price) {
+            logger.debug('Ignoring invalid database cache entry', { url });
+            return null;
+          }
+        }
+        
+        // Verificar se o cache não está expirado
+        const now = Date.now();
+        const cacheTime = new Date(dbCache.scraped_at).getTime();
+        const maxAge = config.cache.ttl * 1000;
+        
+        if (!allowExpired && now - cacheTime > maxAge) {
+          logger.debug('Database cache entry expired', { 
+            url, 
+            age: Math.round((now - cacheTime) / 1000) + 's', 
+            maxAge: maxAge / 1000 + 's' 
+          });
+          return null;
+        }
+        
+        // Adicionar ao cache em memória para futuros acessos
+        if (cacheKey) {
+          cacheService.set(cacheKey, dbCache);
+        }
+        
+        return dbCache;
+      }
     }
     
     return null;

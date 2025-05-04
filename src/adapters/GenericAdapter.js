@@ -6,6 +6,8 @@
 const AbstractAdapter = require('./AbstractAdapter');
 const cheerio = require('cheerio');
 const logger = require('../utils/logger');
+const config = require('../config');
+const { withRetry } = require('../utils/retry');
 
 class GenericAdapter extends AbstractAdapter {
   constructor() {
@@ -20,180 +22,513 @@ class GenericAdapter extends AbstractAdapter {
       price: [
         // Schema.org standard
         '[itemprop="price"]',
+        'meta[itemprop="price"]',
+        'meta[property="product:price:amount"]',
+        'meta[property="og:price:amount"]',
+        'meta[name="twitter:data1"]',
         // Common price selectors across e-commerce sites
         '.price',
         '.product-price',
-        '.price-value',
+        '.price-current',
         '.sales-price',
         '.current-price',
-        '.price-current',
-        '.price-box',
+        '.new-price',
+        '.main-price',
+        '.price-value',
+        '.price__value',
         '.product__price',
-        '.product-info__price',
         '.offer-price',
-        // CSS patterns with price or valor in class name
-        '[class*="price"]',
-        '[class*="Price"]',
-        '[class*="preco"]',
-        '[class*="Preco"]',
-        '[class*="valor"]',
-        '[class*="Valor"]',
-        // Data attributes
-        '[data-price]',
-        '[data-testid*="price"]',
-        '[data-element="price"]',
-        // Elements that often contain prices
-        'strong.price',
-        'span.price',
-        'div.price',
-        'p.price'
+        '.promotion-price',
+        '.card__price',
+        '.final-price',
+        '.actual-price',
+        '.price-box',
+        '.price-container',
+        '.product-page-price',
+        '.special-price',
+        '.product-price-value',
+        // Brazilian e-commerce specific selectors
+        '.preco-produto',
+        '.precoPor',
+        '.valor-por',
+        '.preco-promocional',
+        '.preco-vista',
+        '.price-boleto',
+        '.precoPix',
+        '.preco-a-vista',
+        '.valorpix',
+        '.product-price__best-price',
+        // JSON-LD selectors
+        'script[type="application/ld+json"]'
       ],
       title: [
-        // Schema.org standard
-        '[itemprop="name"]',
-        'h1[itemprop="name"]',
+        // Standard meta tags
+        'meta[property="og:title"]',
+        'meta[name="twitter:title"]',
+        'meta[itemprop="name"]',
         // Common title selectors
         'h1.product-name',
         'h1.product-title',
         'h1.title',
-        '.product-name',
+        'h1.page-title',
         '.product-title',
+        '.product-name',
         '.product__name',
         '.product__title',
+        '#productTitle',
         '.title-product',
-        // Common patterns
-        'h1[class*="title"]',
-        'h1[class*="name"]',
-        'h1[class*="product"]',
-        // Fallback - first h1 on the page
-        'h1'
+        '.product-header',
+        '.main-title',
+        // Brazilian e-commerce specific selectors
+        '.nome-produto',
+        '.product-name-title',
+        '.titulo-produto',
+        '.product-info-name',
+        '.prodTitle',
+        // Schema.org standard
+        '[itemprop="name"]'
       ],
       availability: [
         // Schema.org standard
         '[itemprop="availability"]',
-        '[itemprop="offers"] [itemprop="availability"]',
-        // Common buy button selectors
-        '.buy-button',
-        '.btn-buy',
-        '.add-to-cart',
-        '.add-cart',
-        '.add-to-basket',
-        '.btn-cart',
-        '[class*="buy"]',
-        '[class*="Buy"]',
-        '[class*="cart"]',
-        '[class*="Cart"]',
-        // Data attributes
-        '[data-testid*="buy"]',
-        '[data-testid*="cart"]',
-        '[data-action="buy"]',
-        '[data-action="add-to-cart"]'
-      ],
-      outOfStock: [
+        'meta[itemprop="availability"]',
+        'link[itemprop="availability"]',
         // Common out of stock indicators
         '.out-of-stock',
         '.sold-out',
         '.unavailable',
         '.not-available',
-        '.product-unavailable',
-        '.stock-off',
-        '.no-stock',
-        '[class*="outOfStock"]',
-        '[class*="unavailable"]',
-        '[class*="soldOut"]'
+        '.availability-status',
+        '.stock-status',
+        '.product-availability',
+        // Brazilian out of stock indicators
+        '.produto-indisponivel',
+        '.indisponivel',
+        '.sem-estoque',
+        '.avise-me',
+        '.produto-esgotado',
+        // In stock indicators
+        '.in-stock',
+        '.available',
+        '.stock-available',
+        '.produto-disponivel',
+        '.comprar',
+        '.buy-button',
+        '.add-to-cart'
+      ],
+      // Image selectors for product images
+      image: [
+        'meta[property="og:image"]',
+        'meta[name="twitter:image"]',
+        'meta[itemprop="image"]',
+        '[itemprop="image"]',
+        '#product-image',
+        '.product-image',
+        '.main-image',
+        '.product-photo',
+        '.product-featured-image',
+        '.zoom-image',
+        '.foto-produto-principal',
+        '.product-image-zoom',
+        '.full-image'
       ]
     };
     
-    // Cache para evitar reprocessamento
+    // Common patterns for price extraction using regex
+    this.pricePatterns = [
+      // Match Brazilian price formats (BRL): R$ 1.234,56 
+      /R\$\s?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/i,
+      // Match dollar formats: $1,234.56
+      /\$\s?(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})/i,
+      // Match price with currency codes
+      /(BRL|USD|EUR)\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d{1,3}(?:\.\d{3})*(?:,\d{2}))/i,
+      // Match prices that come after specific words (Brazilian sites)
+      /(?:preço|preco|valor|por|apenas|de)(?:\s+por)?(?:\s+apenas)?(?:\s+R\$)?(?:\s+-)?\s+(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/i,
+      // Match prices that have common Brazilian payment terms
+      /(?:à vista|avista|pix|boleto)(?:\s+por)?(?:\s+R\$)?\s+(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})/i,
+      // Match numbers with exactly 2 decimal places, common price format 
+      /(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}|\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})/
+    ];
+    
+    // Configure blacklist patterns to avoid extracting wrong prices
+    this.priceBlacklist = [
+      /parcela/i,
+      /installment/i,
+      /prestação/i,
+      /pagamento/i,
+      /payment/i,
+      /frete/i,
+      /shipping/i,
+      /entrega/i,
+      /delivery/i,
+      /juros/i, // interest
+      /desconto\s+de/i, // discount of
+      /cashback/i,
+      /pontos?/i, // points
+      /milhas?/i, // miles
+      /código/i, // code
+      /cupom/i, // coupon
+      /cep/i, // zip code
+      /avaliações/i, // ratings
+      /estoque/i // stock
+    ];
+    
+    // Keywords that indicate product availability
+    this.availabilityKeywords = {
+      inStock: [
+        'in stock', 'em estoque', 'disponível', 'available', 'in-stock',
+        'disponibilidade imediata', 'pronta entrega', 'comprar', 'compre agora',
+        'adicionar ao carrinho', 'add to cart', 'buy now', 'comprar agora',
+        'disponível para compra', 'produto disponível', 'disponível em',
+        'em estoque em', 'entrega', 'frete', 'calcular frete', 'envio'
+      ],
+      outOfStock: [
+        'out of stock', 'fora de estoque', 'indisponível', 'unavailable', 'out-of-stock',
+        'produto esgotado', 'sem estoque', 'sold out', 'not available',
+        'avise-me quando chegar', 'notify me', 'produto indisponível', 'esgotado',
+        'não disponível', 'aguardando reposição', 'me avise', 'avise-me',
+        'produto sob encomenda', 'sob consulta'
+      ]
+    };
+    
+    // Initialize cache for reducing redundant processing
     this._cache = new Map();
+    
+    // Store extraction statistics
+    this.stats = {
+      totalAttempts: 0,
+      successfulExtractions: 0,
+      failedExtractions: 0,
+      priceFoundMethods: {},
+      fallbacksUsed: 0
+    };
   }
 
   /**
-   * Check if this adapter can handle a given URL
+   * Determines if this adapter can handle the given URL
    * @param {string} url - URL to check
-   * @returns {boolean} - Always returns true as this is a fallback adapter
+   * @returns {boolean} - True for any URL since this is a fallback adapter
    */
   canHandle(url) {
+    // Generic adapter is designed to handle any e-commerce site
+    // It should be used as a last resort when no specific adapter matches
+    
+    // Skip if URL is missing or invalid
+    if (!url) return false;
+    
     try {
-      // Check if URL is valid
+      // Parse URL to get domain
       const urlObj = new URL(url);
+      const domain = urlObj.hostname;
       
-      // This is a fallback adapter, so only return true for HTTP/HTTPS URLs
-      if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
-        return false;
+      // Avoid handling known non-e-commerce sites
+      const nonEcommercePatterns = [
+        /google\.com$/i,
+        /facebook\.com$/i,
+        /instagram\.com$/i,
+        /twitter\.com$/i,
+        /youtube\.com$/i,
+        /linkedin\.com$/i,
+        /pinterest\.com$/i,
+        /reddit\.com$/i,
+        /wikipedia\.org$/i,
+        /github\.com$/i,
+        /mail\./i,
+        /webmail/i,
+        /gov\./i,
+        /email/i,
+        /login/i,
+        /signin/i,
+        /conta/i,
+        /admin/i
+      ];
+      
+      for (const pattern of nonEcommercePatterns) {
+        if (pattern.test(domain)) {
+          return false;
+        }
       }
       
-      logger.debug('Generic adapter will attempt to handle URL', { url });
+      // Check if URL path contains product-like indicators
+      const path = urlObj.pathname.toLowerCase();
+      const productIndicators = [
+        '/p/', '/produto/', '/product/', '/item/', '/detalhe/', '/pd/', 
+        '/prod/', '/productdetails', '/productdetail', 'comprar'
+      ];
+      
+      // For product-like URLs, this adapter should handle them
+      for (const indicator of productIndicators) {
+        if (path.includes(indicator)) {
+          return true;
+        }
+      }
+      
+      // For all other URLs, the generic adapter will handle them but with lower confidence
       return true;
     } catch (error) {
+      logger.error('Error in GenericAdapter.canHandle', { url }, error);
       return false;
+    }
+  }
+  
+  /**
+   * Pre-process page to handle cookie banners, popups, etc
+   * @param {import('playwright').Page} page - Playwright page object
+   * @returns {Promise<void>}
+   */
+  async preProcess(page) {
+    try {
+      // Set a reasonable timeout
+      const timeout = config.adapter.preProcessTimeout || 15000;
+      
+      // Wait for page to load with retry mechanism
+      await withRetry(
+        async () => {
+          await page.waitForLoadState('domcontentloaded', { timeout: timeout / 2 });
+          
+          // Wait for some meaningful content to appear (a product-related element)
+          const contentSelectors = [
+            // Common product indicators
+            '.product', '.product-info', '.product-details', 
+            '.product-page', '.product-main', '.product-container',
+            '#product', '[itemprop="product"]', '[itemtype*="Product"]',
+            // Brazilian site selectors
+            '.produto', '.detalhe-produto', '.detalhes-produto', 
+            '.ficha-produto', '.pagina-produto'
+          ];
+          
+          // Try to find at least one content element
+          for (const selector of contentSelectors) {
+            const element = await page.$(selector);
+            if (element) {
+              logger.debug('Found product content element', { selector });
+              return; // Found a content element, can proceed
+            }
+          }
+          
+          // If no specific element found, wait for any price-like content
+          await page.waitForSelector(this.selectors.price.join(','), { 
+            timeout: timeout / 2,
+            state: 'attached'
+          }).catch(() => {}); // Ignore errors, we'll try other methods
+        }, 
+        { 
+          retries: 2, 
+          operationName: 'GenericAdapter.preProcess.waitForContent',
+          context: { url: page.url() }
+        }
+      ).catch(() => {
+        // If we fail to find content, just continue with what we have
+        logger.warn('Could not find specific product content, continuing with page as-is');
+      });
+      
+      // Handle cookie banners and popups with retry and multiple approaches
+      await this._handleOverlays(page, timeout);
+      
+      // Scroll page to reveal lazy-loaded content
+      await this._scrollPageToRevealContent(page);
+      
+    } catch (error) {
+      // Log but don't fail the entire extraction for preprocessing issues
+      logger.warn('Error in GenericAdapter preprocessing', {
+        url: page.url(),
+        message: error.message
+      });
     }
   }
 
   /**
-   * Extract all product data from a page
-   * @param {import('playwright').Page} page - Playwright page object
-   * @returns {Promise<Object>} - Extracted product data
+   * Handle overlays, cookie banners, and popups
+   * @param {import('playwright').Page} page - Playwright page
+   * @param {number} timeout - Timeout in ms
+   * @private
    */
-  async extract(page) {
-    // First handle any preprocessing needed for this site
-    await this.preProcess(page);
+  async _handleOverlays(page, timeout) {
+    // Common cookie banner accept buttons
+    const bannerSelectors = [
+      'button[id*="cookie" i]',
+      'button[class*="cookie" i]',
+      'button[id*="accept" i]',
+      'button[class*="accept" i]',
+      '[id*="cookie" i] button',
+      '[class*="cookie" i] button',
+      'button:has-text("Accept")',
+      'button:has-text("Accept All")',
+      'button:has-text("Aceitar")',
+      'button:has-text("Aceitar Todos")',
+      // Common Brazilian e-commerce consent buttons
+      'button:has-text("Continuar e fechar")',
+      'button:has-text("Entendido")',
+      'button:has-text("Concordo")',
+      'button:has-text("Fechar")',
+      'button:has-text("Pular")',
+      'a:has-text("Fechar")',
+      'a:has-text("Pular")',
+      'a:has-text("Entendi")',
+      '.close-button',
+      '.btn-close',
+      '.fechar',
+      '.close-modal',
+      '.modal-close',
+      '.popup-close'
+    ];
     
+    // Try multiple methods to handle overlays
     try {
-      // Get URL for cache key
-      const url = page.url();
-      const cacheKey = `extract:${url}`;
-      
-      // Check cache
-      if (this._cache.has(cacheKey)) {
-        logger.debug('Using cached extraction result', { url });
-        return this._cache.get(cacheKey);
+      // Method 1: Click buttons using Playwright selectors
+      for (const selector of bannerSelectors) {
+        const button = await page.$(selector);
+        if (button) {
+          await button.click().catch(() => {});
+          logger.debug('Clicked overlay element', { selector });
+          await page.waitForTimeout(500); // Short wait to let overlay disappear
+        }
       }
       
-      // Extra wait for content to be fully loaded
-      await page.waitForTimeout(2000);
-      
-      // Extract structured data
-      const structuredData = await this._extractStructuredData(page);
-      
-      // Extract main data
-      const [price, title, availability, productInfo] = await Promise.all([
-        this._extractPrice(page, structuredData),
-        this._extractTitle(page, structuredData),
-        this._extractAvailability(page, structuredData),
-        this._extractProductInfo(page, structuredData)
-      ]);
-      
-      logger.debug('Generic adapter extraction results', {
-        url,
-        hasPrice: !!price,
-        hasTitle: !!title,
-        hasAvailability: availability !== null
+      // Method 2: Evaluate script to remove common overlay elements
+      await page.evaluate(() => {
+        // Common overlay class/id patterns
+        const overlayPatterns = [
+          'cookie', 'banner', 'popup', 'modal', 'overlay', 'newsletter',
+          'lightbox', 'notification', 'consent', 'dialog', 'alert', 'welcome',
+          'popup-container', 'modal-container', 'cookie-notice', 'cookie-banner',
+          'aviso-cookie', 'cookie-consent', 'gdpr', 'privacy-alert', 'subscribe',
+          'inscreva', 'cadastro', 'popup-newsletter'
+        ];
+        
+        // Remove elements that match overlay patterns
+        overlayPatterns.forEach(pattern => {
+          document.querySelectorAll(`[class*="${pattern}" i], [id*="${pattern}" i]`).forEach(el => {
+            // Only remove if it looks like an overlay (fixed position, high z-index)
+            const style = window.getComputedStyle(el);
+            if (style.position === 'fixed' || 
+                style.position === 'absolute' || 
+                parseInt(style.zIndex) > 100) {
+              el.remove();
+            }
+          });
+        });
+        
+        // Remove fixed/absolute positioned elements at the top level that cover significant portion of the page
+        document.querySelectorAll('body > *').forEach(el => {
+          const style = window.getComputedStyle(el);
+          if ((style.position === 'fixed' || style.position === 'absolute') && 
+              style.zIndex && parseInt(style.zIndex) > 100) {
+            
+            // Check if element covers significant portion of viewport
+            const rect = el.getBoundingClientRect();
+            const viewportArea = window.innerWidth * window.innerHeight;
+            const elementArea = rect.width * rect.height;
+            
+            if (elementArea > viewportArea * 0.2) { // If covers more than 20% of viewport
+              el.style.display = 'none';
+            }
+          }
+        });
+        
+        // Reset body overflow to allow scrolling if it was blocked
+        document.body.style.overflow = 'auto';
       });
       
-      // Build result
-      const result = {
-        price,
-        title,
-        availability,
-        ...productInfo,
-        structuredData: structuredData ? true : false,
-        url: page.url(),
-        adapter: 'generic'
-      };
-      
-      // Cache result for reuse
-      this._cache.set(cacheKey, result);
-      
-      // Limit cache size
-      if (this._cache.size > 100) {
-        const firstKey = this._cache.keys().next().value;
-        this._cache.delete(firstKey);
-      }
-      
-      return result;
     } catch (error) {
-      logger.error('Error extracting data using generic adapter', {
+      logger.debug('Error handling overlays', { message: error.message });
+    }
+  }
+  
+  /**
+   * Scroll page to ensure lazy-loaded content is loaded
+   * @param {import('playwright').Page} page - Playwright page object
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _scrollPageToRevealContent(page) {
+    try {
+      // Evaluate scroll script with retry
+      await withRetry(
+        async () => {
+          // Scroll to reveal any lazy-loaded content
+          return await page.evaluate(async () => {
+            // Get initial document height
+            const getDocHeight = () => Math.max(
+              document.body.scrollHeight,
+              document.documentElement.scrollHeight
+            );
+            
+            const viewportHeight = window.innerHeight;
+            let lastHeight = getDocHeight();
+            let totalScrolled = 0;
+            
+            // Scroll down in steps to trigger lazy loading
+            for (let i = 0; i < 6; i++) {
+              const scrollTarget = Math.min(totalScrolled + viewportHeight, lastHeight);
+              window.scrollTo(0, scrollTarget);
+              totalScrolled = scrollTarget;
+              
+              // Wait briefly for content to potentially load
+              await new Promise(r => setTimeout(r, 300));
+              
+              // Check if we've reached the bottom or content isn't expanding
+              const newHeight = getDocHeight();
+              if (totalScrolled >= newHeight || newHeight === lastHeight) {
+                break;
+              }
+              lastHeight = newHeight;
+            }
+            
+            // Return to product details section (likely top of page but not absolute top)
+            window.scrollTo(0, Math.min(500, lastHeight * 0.2));
+            
+            return { 
+              scrolled: totalScrolled,
+              finalHeight: lastHeight
+            };
+          });
+        },
+        {
+          retries: 1,
+          operationName: 'GenericAdapter.scrollPage',
+          context: { url: page.url() }
+        }
+      );
+    } catch (error) {
+      logger.debug('Error scrolling page', { message: error.message });
+    }
+  }
+  
+  /**
+   * Main extraction method for e-commerce product details
+   * @param {import('playwright').Page} page - Playwright page object
+   * @returns {Promise<Object>} - Extracted data object
+   */
+  async extract(page) {
+    try {
+      // First handle any preprocessing needed for this site
+      await this.preProcess(page);
+      
+      // Extract data from the page
+      const price = await this.extractPrice(page);
+      const title = await this.extractTitle(page);
+      const availability = await this.extractAvailability(page);
+      
+      // Try to identify product information from JSON-LD data
+      const jsonLdData = await this._extractJsonLdData(page);
+      
+      // Combine data with preference for explicitly extracted values
+      return {
+        price: price || (jsonLdData?.price ? this.normalizePrice(jsonLdData.price) : null),
+        title: title || jsonLdData?.name || null,
+        availability: availability !== null ? availability : (jsonLdData?.availability ? 
+          this._parseAvailabilityFromJsonLd(jsonLdData.availability) : true),
+        currency: jsonLdData?.priceCurrency || null,
+        metadata: {
+          url: page.url(),
+          domain: this._extractDomain(page.url()),
+          extractedAt: new Date().toISOString(),
+          adapter: 'GenericAdapter'
+        }
+      };
+    } catch (error) {
+      logger.error('Error extracting data using GenericAdapter', {
         url: page.url(),
         domain: this._extractDomain(page.url())
       }, error);
@@ -201,822 +536,511 @@ class GenericAdapter extends AbstractAdapter {
       throw new Error(`Generic extraction failed: ${error.message}`);
     }
   }
-
+  
   /**
-   * Extract structured data from page
+   * Extract price from the page
    * @param {import('playwright').Page} page - Playwright page
-   * @returns {Promise<Object|null>} - Structured data or null
-   * @private
-   */
-  async _extractStructuredData(page) {
-    try {
-      return await page.evaluate(() => {
-        const result = {
-          jsonLd: [],
-          microdata: [],
-          openGraph: {},
-          meta: {}
-        };
-        
-        // Extract JSON-LD
-        const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
-        if (jsonLdScripts.length) {
-          jsonLdScripts.forEach(script => {
-            try {
-              if (script.textContent) {
-                const jsonData = JSON.parse(script.textContent);
-                result.jsonLd.push(jsonData);
-              }
-            } catch (e) {
-              // Ignore parse errors
-            }
-          });
-        }
-        
-        // Extract Open Graph
-        const ogMetaTags = document.querySelectorAll('meta[property^="og:"]');
-        if (ogMetaTags.length) {
-          ogMetaTags.forEach(tag => {
-            const property = tag.getAttribute('property');
-            const content = tag.getAttribute('content');
-            if (property && content) {
-              const key = property.replace('og:', '');
-              result.openGraph[key] = content;
-            }
-          });
-        }
-        
-        // Extract basic meta tags
-        const metaTags = document.querySelectorAll('meta[name][content]');
-        if (metaTags.length) {
-          metaTags.forEach(tag => {
-            const name = tag.getAttribute('name');
-            const content = tag.getAttribute('content');
-            if (name && content) {
-              result.meta[name] = content;
-            }
-          });
-        }
-        
-        // Extract common global e-commerce variables
-        const jsData = {};
-        
-        // Common variable names that could contain product data
-        const globalVarNames = [
-          'window.dataLayer',
-          'window.__INITIAL_STATE__',
-          'window.__PRELOADED_STATE__',
-          'window.PRODUCT_DATA',
-          'window.product',
-          'window.productData',
-          'window.__NEXT_DATA__',
-          'window.PRODUCT',
-          'window.__APOLLO_STATE__',
-          'window.digitalData'
-        ];
-        
-        // Try to extract each global variable
-        globalVarNames.forEach(varPath => {
-          try {
-            const parts = varPath.split('.');
-            let obj = window;
-            for (const part of parts.slice(1)) {
-              obj = obj[part];
-              if (!obj) break;
-            }
-            if (obj) {
-              jsData[parts[parts.length - 1]] = JSON.parse(JSON.stringify(obj));
-            }
-          } catch (e) {
-            // Ignore errors
-          }
-        });
-        
-        if (Object.keys(jsData).length > 0) {
-          result.jsData = jsData;
-        }
-        
-        return Object.keys(result.jsonLd).length > 0 || 
-               Object.keys(result.openGraph).length > 0 || 
-               Object.keys(result.meta).length > 0 || 
-               Object.keys(jsData).length > 0 ? result : null;
-      });
-    } catch (error) {
-      logger.debug('Error extracting structured data', {}, error);
-      return null;
-    }
-  }
-
-  /**
-   * Extract price from page
-   * @param {import('playwright').Page} page - Playwright page
-   * @param {Object} structuredData - Pre-extracted structured data
    * @returns {Promise<number|null>} - Extracted price or null
-   * @private
    */
-  async _extractPrice(page, structuredData = null) {
+  async extractPrice(page) {
     try {
-      // 1. Try to extract from structured data
-      if (structuredData) {
-        // Check JSON-LD
-        if (structuredData.jsonLd && structuredData.jsonLd.length) {
-          for (const item of structuredData.jsonLd) {
-            // Standard Product schema
-            if (item['@type'] === 'Product' && item.offers) {
-              const offers = Array.isArray(item.offers) ? item.offers : [item.offers];
-              for (const offer of offers) {
-                if (offer.price) {
-                  return this._normalizePrice(offer.price);
-                }
-              }
-            }
-            
-            // Any object with a price
-            if (item.price) {
-              return this._normalizePrice(item.price);
-            }
-            
-            // Look for nested offers
-            if (item.offers && item.offers.price) {
-              return this._normalizePrice(item.offers.price);
-            }
-          }
-        }
-        
-        // Check Open Graph
-        if (structuredData.openGraph && structuredData.openGraph.price) {
-          return this._normalizePrice(structuredData.openGraph.price);
-        }
-        
-        // Check meta tags
-        if (structuredData.meta && structuredData.meta.price) {
-          return this._normalizePrice(structuredData.meta.price);
-        }
-        
-        // Check JavaScript data
-        if (structuredData.jsData) {
-          // Helper function to recursively search for price in an object
-          const findPrice = (obj, maxDepth = 3, currentDepth = 0) => {
-            if (currentDepth > maxDepth || typeof obj !== 'object' || obj === null) return null;
-            
-            // Check direct price properties
-            const priceProps = ['price', 'priceValue', 'currentPrice', 'salesPrice', 'sellingPrice'];
-            for (const prop of priceProps) {
-              if (obj[prop] !== undefined && obj[prop] !== null) {
-                const price = this._normalizePrice(obj[prop]);
-                if (price) return price;
-              }
-            }
-            
-            // Check nested objects
-            for (const key in obj) {
-              if (typeof obj[key] === 'object' && obj[key] !== null) {
-                const price = findPrice(obj[key], maxDepth, currentDepth + 1);
-                if (price) return price;
-              }
-            }
-            
-            return null;
-          };
-          
-          // Try each data source
-          for (const key in structuredData.jsData) {
-            const price = findPrice(structuredData.jsData[key]);
-            if (price) return price;
-          }
-        }
+      // Try to extract price using selectors
+      let price = await this._extractPriceFromSelectors(page);
+      
+      // If not found, try to extract from HTML content with regex
+      if (!price) {
+        price = await this._extractPriceFromHtml(page);
       }
       
-      // 2. Try to extract from DOM selectors
-      for (const selector of this.selectors.price) {
-        try {
-          const element = await page.$(selector);
-          if (element) {
-            const priceText = await element.textContent();
-            if (priceText) {
-              const price = this._normalizePrice(priceText);
-              if (price) return price;
-            }
-            
-            // Check for data-price attribute
-            const dataPriceAttr = await element.getAttribute('data-price');
-            if (dataPriceAttr) {
-              const price = this._normalizePrice(dataPriceAttr);
-              if (price) return price;
-            }
-          }
-        } catch (e) {
-          // Continue to next selector
-        }
+      // If still not found, try to extract from meta tags
+      if (!price) {
+        price = await this._extractPriceFromMeta(page);
       }
       
-      // 3. Look for meta tags with prices
-      const metaPrice = await page.evaluate(() => {
-        const metaTags = document.querySelectorAll('meta[property="product:price:amount"], meta[name="product:price:amount"], meta[property="og:price:amount"]');
-        for (const tag of metaTags) {
-          return tag.getAttribute('content');
-        }
-        return null;
-      });
-      
-      if (metaPrice) {
-        const price = this._normalizePrice(metaPrice);
-        if (price) return price;
-      }
-      
-      // 4. Look for price in the page content using regex
-      const html = await page.content();
-      const priceRegexPatterns = [
-        /[R$£€\$]\s*(\d+(?:[.,]\d+)?)/gi,
-        /"price":["']?(\d+(?:[.,]\d+)?)["']?/gi,
-        /"currentPrice":["']?(\d+(?:[.,]\d+)?)["']?/gi,
-        /"sellingPrice":["']?(\d+(?:[.,]\d+)?)["']?/gi
-      ];
-      
-      for (const pattern of priceRegexPatterns) {
-        const matches = Array.from(html.matchAll(pattern));
-        if (matches.length > 0) {
-          // Find the most reasonable price (filter out very high or very low values)
-          const prices = matches.map(match => this._normalizePrice(match[1]))
-                                .filter(p => p !== null)
-                                .sort((a, b) => a - b);
-          
-          // Take a price in a reasonable range if available
-          for (const price of prices) {
-            if (price > 1 && price < 100000) {
-              return price;
-            }
-          }
-          
-          // If we can't find a reasonable price, return the first one
-          if (prices.length > 0) {
-            return prices[0];
-          }
-        }
+      // If found, normalize and return
+      if (price) {
+        return this.normalizePrice(price);
       }
       
       return null;
     } catch (error) {
-      logger.error('Error extracting price', { url: page.url() }, error);
+      logger.warn('Error extracting price with GenericAdapter', { url: page.url() }, error);
       return null;
     }
   }
-
+  
   /**
-   * Extract title from page
+   * Extract price from selectors
    * @param {import('playwright').Page} page - Playwright page
-   * @param {Object} structuredData - Pre-extracted structured data
-   * @returns {Promise<string|null>} - Extracted title or null
+   * @returns {Promise<string|null>} - Raw price string or null
    * @private
    */
-  async _extractTitle(page, structuredData = null) {
-    try {
-      // 1. Try from structured data
-      if (structuredData) {
-        // Check JSON-LD
-        if (structuredData.jsonLd && structuredData.jsonLd.length) {
-          for (const item of structuredData.jsonLd) {
-            if (item.name) {
-              return item.name;
-            }
-          }
-        }
-        
-        // Check Open Graph
-        if (structuredData.openGraph && structuredData.openGraph.title) {
-          return structuredData.openGraph.title;
-        }
-        
-        // Check meta tags
-        if (structuredData.meta && structuredData.meta.title) {
-          return structuredData.meta.title;
-        }
-      }
+  async _extractPriceFromSelectors(page) {
+    for (const selector of this.selectors.price) {
+      // Skip JSON-LD selector as it's handled differently
+      if (selector.includes('application/ld+json')) continue;
       
-      // 2. Try to extract from meta tags
-      const metaTitle = await page.evaluate(() => {
-        const metaTitle = document.querySelector('meta[property="og:title"]') || 
-                          document.querySelector('meta[name="title"]') ||
-                          document.querySelector('meta[name="twitter:title"]');
-                          
-        return metaTitle ? metaTitle.getAttribute('content') : null;
-      });
-      
-      if (metaTitle) return metaTitle;
-      
-      // 3. Try each title selector
-      for (const selector of this.selectors.title) {
-        try {
-          const element = await page.$(selector);
-          if (element) {
-            const titleText = await element.textContent();
-            if (titleText && titleText.trim().length > 0) return titleText.trim();
-          }
-        } catch (e) {
-          // Continue to next selector
-        }
-      }
-      
-      // 4. Fall back to page title
-      const pageTitle = await page.title();
-      if (pageTitle) {
-        // Try to clean up the page title (remove site name if present)
-        const parts = pageTitle.split(/[|\-–—]/).map(p => p.trim());
-        if (parts.length > 1) {
-          // Return the longest part as it's likely the product title
-          return parts.reduce((a, b) => a.length > b.length ? a : b);
-        }
-        return pageTitle;
-      }
-      
-      return null;
-    } catch (error) {
-      logger.error('Error extracting title', { url: page.url() }, error);
-      return null;
-    }
-  }
-
-  /**
-   * Extract availability from page
-   * @param {import('playwright').Page} page - Playwright page
-   * @param {Object} structuredData - Pre-extracted structured data
-   * @returns {Promise<boolean|null>} - True if available, false if not, null if unknown
-   * @private
-   */
-  async _extractAvailability(page, structuredData = null) {
-    try {
-      // 1. Check structured data
-      if (structuredData) {
-        // Check JSON-LD
-        if (structuredData.jsonLd && structuredData.jsonLd.length) {
-          for (const item of structuredData.jsonLd) {
-            if (item.offers) {
-              const offers = Array.isArray(item.offers) ? item.offers : [item.offers];
-              for (const offer of offers) {
-                if (offer.availability) {
-                  return offer.availability.includes('InStock');
-                }
-              }
-            }
-          }
-        }
-      }
-      
-      // 2. Check for out of stock indicators
-      for (const selector of this.selectors.outOfStock) {
+      try {
         const element = await page.$(selector);
         if (element) {
-          // Check the text to confirm it's about availability
+          // Try to extract from content attribute first (for meta tags)
+          const priceFromContent = await element.getAttribute('content');
+          if (priceFromContent) {
+            const normalizedPrice = this._cleanPriceString(priceFromContent);
+            if (this._isValidPrice(normalizedPrice)) {
+              return normalizedPrice;
+            }
+          }
+          
+          // If not in content, get text content
           const text = await element.textContent();
-          if (text && (
-            text.toLowerCase().includes('esgotado') ||
-            text.toLowerCase().includes('indisponível') ||
-            text.toLowerCase().includes('sem estoque') ||
-            text.toLowerCase().includes('fora de estoque') ||
-            text.toLowerCase().includes('out of stock') ||
-            text.toLowerCase().includes('unavailable') ||
-            text.toLowerCase().includes('sold out')
-          )) {
+          if (text) {
+            const normalizedPrice = this._cleanPriceString(text);
+            if (this._isValidPrice(normalizedPrice)) {
+              return normalizedPrice;
+            }
+          }
+        }
+      } catch (e) {
+        // Continue to next selector on error
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Extract price from HTML using regex patterns
+   * @param {import('playwright').Page} page - Playwright page
+   * @returns {Promise<string|null>} - Raw price string or null
+   * @private
+   */
+  async _extractPriceFromHtml(page) {
+    try {
+      // Get price-related parts of the HTML
+      const priceHtml = await page.evaluate(() => {
+        const elements = [];
+        
+        // Find elements with price-related keywords
+        const priceKeywords = ['price', 'preço', 'valor', 'oferta', 'promocao', 'promo'];
+        
+        for (const keyword of priceKeywords) {
+          // Search in id, class, and data attributes
+          document.querySelectorAll(`[id*="${keyword}" i], [class*="${keyword}" i], [data-*="${keyword}" i]`)
+            .forEach(el => elements.push(el.outerHTML));
+        }
+        
+        return elements.join(' ');
+      });
+      
+      if (!priceHtml) return null;
+      
+      // Apply regex patterns to find price
+      for (const pattern of this.pricePatterns) {
+        const match = priceHtml.match(pattern);
+        if (match && match[1]) {
+          const priceStr = match[1];
+          
+          // Check if price is in a blacklisted context (e.g., "parcela de R$ 99,90")
+          let isBlacklisted = false;
+          for (const blacklistPattern of this.priceBlacklist) {
+            // Get 50 characters before and after the price for context
+            const startIdx = Math.max(0, priceHtml.indexOf(priceStr) - 50);
+            const endIdx = Math.min(priceHtml.length, priceHtml.indexOf(priceStr) + priceStr.length + 50);
+            const context = priceHtml.substring(startIdx, endIdx);
+            
+            if (blacklistPattern.test(context)) {
+              isBlacklisted = true;
+              break;
+            }
+          }
+          
+          if (!isBlacklisted && this._isValidPrice(priceStr)) {
+            return priceStr;
+          }
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      logger.debug('Error extracting price from HTML', { url: page.url() }, error);
+      return null;
+    }
+  }
+  
+  /**
+   * Extract price from meta tags
+   * @param {import('playwright').Page} page - Playwright page
+   * @returns {Promise<string|null>} - Raw price string or null
+   * @private
+   */
+  async _extractPriceFromMeta(page) {
+    const metaSelectors = [
+      'meta[property="product:price:amount"]',
+      'meta[property="og:price:amount"]',
+      'meta[property="product:price"]',
+      'meta[name="twitter:data1"]'
+    ];
+    
+    for (const selector of metaSelectors) {
+      try {
+        const content = await page.$eval(selector, el => el.getAttribute('content'));
+        if (content && this._isValidPrice(content)) {
+          return content;
+        }
+      } catch (e) {
+        // Continue to next selector on error
+      }
+    }
+    
+    return null;
+  }
+  
+  /**
+   * Extract title from the page
+   * @param {import('playwright').Page} page - Playwright page
+   * @returns {Promise<string|null>} - Product title or null
+   */
+  async extractTitle(page) {
+    try {
+      // Try to extract title from selectors
+      for (const selector of this.selectors.title) {
+        try {
+          if (selector.startsWith('meta')) {
+            // For meta tags, get content attribute
+            const content = await page.$eval(selector, el => el.getAttribute('content'));
+            if (content) return content.trim();
+          } else {
+            // For regular elements, get text content
+            const text = await page.$eval(selector, el => el.textContent);
+            if (text) return text.trim();
+          }
+        } catch (e) {
+          // Continue to next selector on error
+        }
+      }
+      
+      // If not found from selectors, try common title patterns
+      try {
+        // Try to get from document title with common patterns
+        const pageTitle = await page.title();
+        if (pageTitle) {
+          // Remove common separators and site names
+          const cleanedTitle = pageTitle
+            .replace(/[|\-–—]\s*[\w\s]+\.[a-z]{2,}$/, '') // Remove site name after separator
+            .replace(/[|\-–—].*?compre\s+online/, '') // Remove "| Compre online" etc.
+            .replace(/[|\-–—].*?Comprar\s+na\s+[\w\s]+/, '') // Remove "| Comprar na Amazon" etc.
+            .trim();
+            
+          if (cleanedTitle) return cleanedTitle;
+        }
+      } catch (e) {
+        // Fallback to other methods on error
+      }
+      
+      // Last resort: try using h1 elements (most product pages have the title as h1)
+      try {
+        const h1Text = await page.$eval('h1', el => el.textContent);
+        if (h1Text) return h1Text.trim();
+      } catch (e) {
+        // No h1 found or other error
+      }
+      
+      return null;
+    } catch (error) {
+      logger.warn('Error extracting title with GenericAdapter', { url: page.url() }, error);
+      return null;
+    }
+  }
+  
+  /**
+   * Extract availability information
+   * @param {import('playwright').Page} page - Playwright page
+   * @returns {Promise<boolean|null>} - true if available, false if unavailable, null if unknown
+   */
+  async extractAvailability(page) {
+    try {
+      // Try to extract from schema.org markup first
+      try {
+        const availability = await page.$eval('[itemprop="availability"]', el => {
+          return el.getAttribute('href') || el.getAttribute('content') || el.textContent;
+        });
+        
+        if (availability) {
+          if (availability.includes('InStock') || availability.includes('in stock')) {
+            return true;
+          } else if (availability.includes('OutOfStock') || availability.includes('out of stock')) {
             return false;
           }
         }
+      } catch (e) {
+        // No schema.org markup found, continue to other methods
       }
       
-      // 3. Check for availability indicators
+      // Check for common out-of-stock indicators
       for (const selector of this.selectors.availability) {
-        const element = await page.$(selector);
-        if (element) {
-          // Check if enabled
-          const isDisabled = await page.evaluate(btn => {
-            return btn.disabled || 
-                   btn.getAttribute('disabled') === 'true' || 
-                   btn.classList.contains('disabled') ||
-                   btn.style.display === 'none';
-          }, element);
+        try {
+          if (await page.$(selector)) {
+            const text = await page.$eval(selector, el => el.textContent.toLowerCase());
+            
+            // Check against out-of-stock keywords
+            for (const keyword of this.availabilityKeywords.outOfStock) {
+              if (text.includes(keyword.toLowerCase())) {
+                return false;
+              }
+            }
+            
+            // Check against in-stock keywords
+            for (const keyword of this.availabilityKeywords.inStock) {
+              if (text.includes(keyword.toLowerCase())) {
+                return true;
+              }
+            }
+            
+            // If there's an availability element but no clear status, check for specific text
+            if (selector.includes('availability') || selector.includes('stock')) {
+              // If element found is related to stock status but ambiguous, 
+              // inspect add-to-cart buttons as fallback
+              break;
+            }
+          }
+        } catch (e) {
+          // Continue to next selector on error
+        }
+      }
+      
+      // Check for add-to-cart buttons (presence usually indicates availability)
+      try {
+        const cartButtonSelectors = [
+          'button[id*="add-to-cart" i]',
+          'button[class*="add-to-cart" i]',
+          'button[id*="addtocart" i]',
+          'button[class*="addtocart" i]',
+          'button[id*="comprar" i]',
+          'button[class*="comprar" i]',
+          'a[id*="add-to-cart" i]',
+          'a[class*="add-to-cart" i]',
+          'a[id*="comprar" i]',
+          'a[class*="comprar" i]',
+          '[id*="buy-now" i]',
+          '[class*="buy-now" i]',
+          '[id*="buy-button" i]',
+          '[class*="buy-button" i]'
+        ];
+        
+        for (const selector of cartButtonSelectors) {
+          const isDisabled = await page.evaluate(sel => {
+            const button = document.querySelector(sel);
+            return button ? button.disabled || button.classList.contains('disabled') : true;
+          }, selector);
           
           if (!isDisabled) {
+            // Found an enabled add-to-cart button
             return true;
           }
         }
+      } catch (e) {
+        // Continue with other checks on error
       }
       
-      // 4. Check page content for availability indicators
-      const availabilityText = await page.evaluate(() => {
-        const body = document.body.innerText.toLowerCase();
-        
-        // Out of stock indicators
-        if (body.includes('out of stock') || 
-            body.includes('unavailable') || 
-            body.includes('sold out') ||
-            body.includes('esgotado') || 
-            body.includes('indisponível') || 
-            body.includes('sem estoque') ||
-            body.includes('fora de estoque')) {
+      // Look for specific out-of-stock texts in the page content
+      const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
+      
+      for (const keyword of this.availabilityKeywords.outOfStock) {
+        if (pageText.includes(keyword.toLowerCase())) {
           return false;
         }
+      }
+      
+      // Default to available if we couldn't determine otherwise
+      // (most product pages show products that are available)
+      return true;
+    } catch (error) {
+      logger.warn('Error extracting availability with GenericAdapter', { url: page.url() }, error);
+      return null;
+    }
+  }
+  
+  /**
+   * Extract structured data from JSON-LD scripts
+   * @param {import('playwright').Page} page - Playwright page
+   * @returns {Promise<Object|null>} - JSON-LD data or null
+   * @private
+   */
+  async _extractJsonLdData(page) {
+    try {
+      const jsonLdData = await page.evaluate(() => {
+        const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
         
-        // In stock indicators
-        if (body.includes('in stock') || 
-            body.includes('available') || 
-            body.includes('em estoque') || 
-            body.includes('disponível')) {
-          return true;
+        for (const script of scripts) {
+          try {
+            const data = JSON.parse(script.textContent);
+            
+            // Look for product data in various formats
+            if (data['@type'] === 'Product') {
+              return data;
+            } else if (data['@graph']) {
+              // Find product in graph
+              const product = data['@graph'].find(item => item['@type'] === 'Product');
+              if (product) return product;
+            } else if (Array.isArray(data) && data.some(item => item['@type'] === 'Product')) {
+              return data.find(item => item['@type'] === 'Product');
+            }
+          } catch (e) {
+            // Ignore parsing errors and continue
+          }
         }
         
         return null;
       });
       
-      if (availabilityText !== null) return availabilityText;
+      if (!jsonLdData) return null;
       
-      // 5. If we have a price, assume the product is available
-      const price = await this._extractPrice(page, structuredData);
-      if (price !== null) {
-        return true;
+      // Extract relevant product data
+      const result = {
+        name: jsonLdData.name,
+        description: jsonLdData.description,
+        availability: null,
+        price: null,
+        priceCurrency: null,
+        image: null
+      };
+      
+      // Extract price information
+      if (jsonLdData.offers) {
+        const offers = Array.isArray(jsonLdData.offers) ? 
+          jsonLdData.offers[0] : jsonLdData.offers;
+        
+        if (offers) {
+          result.price = offers.price || null;
+          result.priceCurrency = offers.priceCurrency || null;
+          result.availability = offers.availability || null;
+        }
       }
       
-      return null;
+      // Extract image
+      if (jsonLdData.image) {
+        if (typeof jsonLdData.image === 'string') {
+          result.image = jsonLdData.image;
+        } else if (Array.isArray(jsonLdData.image) && jsonLdData.image.length > 0) {
+          result.image = jsonLdData.image[0];
+        } else if (jsonLdData.image.url) {
+          result.image = jsonLdData.image.url;
+        }
+      }
+      
+      return result;
     } catch (error) {
-      logger.error('Error extracting availability', { url: page.url() }, error);
+      logger.debug('Error extracting JSON-LD data', { url: page.url() }, error);
       return null;
     }
   }
-
+  
   /**
-   * Extract additional product information
-   * @param {import('playwright').Page} page - Playwright page
-   * @param {Object} structuredData - Pre-extracted structured data
-   * @returns {Promise<Object>} - Additional product information
+   * Parse availability string from JSON-LD
+   * @param {string} availability - Availability string from JSON-LD
+   * @returns {boolean} - true if available, false if not
    * @private
    */
-  async _extractProductInfo(page, structuredData = null) {
-    try {
-      const info = {};
-      
-      // 1. Extract from structured data
-      if (structuredData) {
-        // Check JSON-LD
-        if (structuredData.jsonLd && structuredData.jsonLd.length) {
-          for (const item of structuredData.jsonLd) {
-            // Extract brand
-            if (item.brand) {
-              info.brand = typeof item.brand === 'string' ? item.brand : (item.brand.name || null);
-            }
-            
-            // Extract SKU
-            if (item.sku) {
-              info.sku = item.sku;
-            }
-            
-            // Extract image
-            if (item.image) {
-              info.imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
-            }
-            
-            // Extract description
-            if (item.description && !info.description) {
-              info.description = item.description;
-            }
-          }
-        }
-        
-        // Check Open Graph
-        if (structuredData.openGraph) {
-          if (!info.imageUrl && structuredData.openGraph.image) {
-            info.imageUrl = structuredData.openGraph.image;
-          }
-          
-          if (!info.description && structuredData.openGraph.description) {
-            info.description = structuredData.openGraph.description;
-          }
-        }
-      }
-      
-      // 2. Extract from DOM
-      const domInfo = await page.evaluate(() => {
-        const extracted = {};
-        
-        // Try to get main image
-        const imageElement = document.querySelector('[itemprop="image"], .product-image img, .product__image img');
-        if (imageElement) {
-          extracted.imageUrl = imageElement.getAttribute('src') || imageElement.getAttribute('data-src');
-        }
-        
-        // Try to get seller
-        const sellerElement = document.querySelector('[itemprop="seller"], .seller-name, .product-seller, .sold-by');
-        if (sellerElement) {
-          extracted.seller = sellerElement.textContent.trim();
-        }
-        
-        // Try to get brand
-        const brandElement = document.querySelector('[itemprop="brand"], .brand, .product-brand');
-        if (brandElement) {
-          extracted.brand = brandElement.textContent.trim();
-        }
-        
-        // Try to get specifications table
-        const specs = {};
-        const specRows = document.querySelectorAll('.specifications tr, .product-specs tr, .product-details tr, [class*="spec"] tr');
-        
-        specRows.forEach(row => {
-          const label = row.querySelector('th') || row.querySelector('td:first-child');
-          const value = row.querySelector('td:last-child') || row.querySelector('td:nth-child(2)');
-          
-          if (label && value && label !== value) {
-            const labelText = label.textContent.trim();
-            const valueText = value.textContent.trim();
-            
-            if (labelText && valueText) {
-              specs[labelText] = valueText;
-              
-              // Extract common fields
-              if (labelText.toLowerCase().includes('brand') || 
-                  labelText.toLowerCase().includes('marca')) {
-                extracted.brand = valueText;
-              }
-              
-              if (labelText.toLowerCase().includes('model') || 
-                  labelText.toLowerCase().includes('modelo')) {
-                extracted.model = valueText;
-              }
-            }
-          }
-        });
-        
-        if (Object.keys(specs).length > 0) {
-          extracted.specifications = specs;
-        }
-        
-        return extracted;
-      });
-      
-      return { ...info, ...domInfo };
-    } catch (error) {
-      logger.debug('Error extracting product info', { url: page.url() }, error);
-      return {};
+  _parseAvailabilityFromJsonLd(availability) {
+    if (!availability) return true;
+    
+    const availabilityString = availability.toLowerCase();
+    
+    if (availabilityString.includes('instock') || 
+        availabilityString.includes('in stock') ||
+        availabilityString.includes('available')) {
+      return true;
     }
-  }
-
-  /**
-   * Check if the site is blocking our scraper
-   * @param {import('playwright').Page} page - Playwright page
-   * @returns {Promise<boolean>} - True if blocked, false otherwise
-   */
-  async isBlocked(page) {
-    try {
-      // Check for common blocking indicators in page content and URL
-      const blocked = await page.evaluate(() => {
-        const body = document.body.textContent.toLowerCase();
-        const url = window.location.href.toLowerCase();
-        const title = document.title.toLowerCase();
-        
-        // Common bot detection keywords
-        const botDetectionTerms = [
-          'captcha', 
-          'robot', 
-          'bot', 
-          'automated', 
-          'challenge', 
-          'security check',
-          'verificação', 
-          'verificacion',
-          'human verification',
-          'suspicious activity',
-          'unusual traffic',
-          'access denied',
-          'acesso negado',
-          'blocked',
-          'bloqueado'
-        ];
-        
-        // Check body text for bot detection terms
-        const hasBlockingTerms = botDetectionTerms.some(term => body.includes(term));
-        
-        // Check URL for captcha or verification paths
-        const suspiciousUrl = 
-          url.includes('/captcha') || 
-          url.includes('/challenge') || 
-          url.includes('/verify') || 
-          url.includes('/security-check') || 
-          url.includes('/human');
-        
-        // Check title for blocking indicators
-        const suspiciousTitle = 
-          title.includes('captcha') || 
-          title.includes('robot') || 
-          title.includes('security') || 
-          title.includes('verificação') || 
-          title.includes('verificacion') ||
-          title.includes('blocked') || 
-          title.includes('denied');
-          
-        return hasBlockingTerms || suspiciousUrl || suspiciousTitle;
-      });
-      
-      if (blocked) {
-        // Look for specific elements that confirm blocking
-        const captchaElements = await page.$$([
-          // Common captcha selectors across sites
-          'form[action*="captcha"]',
-          'img[src*="captcha"]',
-          '.captcha-container',
-          '.captcha-challenge',
-          '.g-recaptcha',
-          '[data-sitekey]', // reCAPTCHA attribute
-          'iframe[src*="recaptcha"]',
-          'iframe[src*="captcha"]',
-          // Cloudflare and other services
-          '#challenge-form',
-          '#challenge-running',
-          '.cf-browser-verification',
-          // Common text in bot detection elements
-          'text="I\'m not a robot"',
-          'text="Sou humano"',
-          'text="Confirm you are human"',
-          'text="Verificação de segurança"'
-        ].join(','));
-        
-        if (captchaElements.length > 0) {
-          logger.warn('Detected captcha/challenge on page', { url: page.url() });
-          return true;
-        }
-        
-        // Also check for HTTP status indicators through the page
-        const status403 = await page.$('.status-code:text("403"), .error-code:text("403")');
-        if (status403) {
-          logger.warn('Detected 403 error page', { url: page.url() });
-          return true;
-        }
-        
-        logger.warn('Potential blocking detected on page', { url: page.url() });
-      }
-      
-      return blocked;
-    } catch (error) {
-      logger.error('Error checking if blocked', { url: page.url() }, error);
+    
+    if (availabilityString.includes('outofstock') ||
+        availabilityString.includes('out of stock') ||
+        availabilityString.includes('unavailable') ||
+        availabilityString.includes('soldout') ||
+        availabilityString.includes('sold out')) {
       return false;
     }
+    
+    return true; // Default to available
   }
-
+  
   /**
-   * Prepare page for scraping
-   * @param {import('playwright').Page} page - Playwright page
-   * @returns {Promise<void>}
-   */
-  async preProcess(page) {
-    try {
-      // Wait for content to load
-      await page.waitForLoadState('domcontentloaded');
-      
-      // Try to close common popups and accept cookies - more comprehensive list
-      const closeSelectors = [
-        // Cookie banners - common patterns across many sites
-        '.cookie-notice .accept', '.cookie-notice .agree', '.cookie-notice [aria-label*="accept"]',
-        '.cookie-banner .accept', '.cookie-banner .agree', '.cookie-banner [aria-label*="accept"]',
-        '.cookie-consent .accept', '.cookie-consent .agree', '.cookie-consent [aria-label*="accept"]',
-        '.cookies-consent-banner button', 
-        '.cookie-consent-banner button',
-        '#accept-cookies', '#acceptCookies', '[data-testid="accept-cookies"]',
-        '[aria-label="accept cookies"]', '[aria-label="accept all cookies"]',
-        '[aria-label="accept and close"]',
-        'button:has-text("Accept")', 'button:has-text("Accept Cookies")', 
-        'button:has-text("Accept All")', 'button:has-text("Allow cookies")',
-        'button:has-text("Aceitar")', 'button:has-text("Aceitar Cookies")',
-        'button:has-text("Ok")', 'button:has-text("OK")', 'button:has-text("Continue")',
-        // GDPR specific
-        '.gdpr-banner .accept', '.gdpr-banner .agree',
-        '.gdpr-consent button', '.gdpr-cookie-notice button',
-        // Privacy banners
-        '.privacy-banner .accept', '.privacy-policy-banner .accept',
-        // Newsletter and subscription popups
-        '.newsletter-popup .close', '.newsletter-popup-close', '.newsletter-modal .close',
-        '.signup-popup .close', '.subscription-popup .close',
-        // General modals and popups
-        '.modal-close', '.modal .close', '.modal [aria-label="Close"]',
-        '.popup-close', '.popup .close', '.popup [aria-label="Close"]',
-        '.close-modal', '.dismiss-modal', 
-        '.overlay-close', '.overlay .close', 
-        '.lightbox-close', '.lightbox .close',
-        // Chat widgets
-        '.chat-widget-close', '.livechat-close', '.chat-popup .close'
-      ];
-      
-      // Try each selector
-      for (const selector of closeSelectors) {
-        try {
-          const closeButtons = await page.$$(selector);
-          for (const button of closeButtons) {
-            // Check if the button is visible before clicking
-            const isVisible = await button.isVisible();
-            if (isVisible) {
-              await button.click().catch(() => {});
-              // Small wait after clicking to allow animation to complete
-              await page.waitForTimeout(300);
-            }
-          }
-        } catch (e) {
-          // Ignore errors and continue with next selector
-        }
-      }
-      
-      // Also try to press Escape key to close popups
-      await page.keyboard.press('Escape').catch(() => {});
-      
-      // Scroll down to trigger lazy-loaded content
-      await page.evaluate(() => {
-        // Scroll down smoothly
-        const maxScrollY = Math.max(
-          document.body.scrollHeight, 
-          document.documentElement.scrollHeight,
-          document.body.offsetHeight,
-          document.documentElement.offsetHeight
-        ) * 0.6; // Scroll to 60% of page
-        
-        // Use smooth scrolling for better simulation
-        const scrollStep = Math.floor(maxScrollY / 10);
-        let currentScroll = 0;
-        
-        function smoothScroll() {
-          if (currentScroll < maxScrollY) {
-            currentScroll = Math.min(currentScroll + scrollStep, maxScrollY);
-            window.scrollTo(0, currentScroll);
-            setTimeout(smoothScroll, 100);
-          }
-        }
-        
-        smoothScroll();
-      });
-      
-      // Wait for dynamic content to load
-      await page.waitForTimeout(1500);
-    } catch (error) {
-      logger.debug('Error in pre-processing', { url: page.url() }, error);
-    }
-  }
-
-  /**
-   * Normalize price value from various formats
-   * @param {string|number} price - Price in various formats
-   * @returns {number|null} - Normalized price as number or null
+   * Clean price string and remove non-numeric characters except for decimal separator
+   * @param {string} price - Price string to clean
+   * @returns {string} - Cleaned price string
    * @private
    */
-  _normalizePrice(price) {
-    if (!price) return null;
+  _cleanPriceString(price) {
+    if (!price) return '';
+    
+    // Convert to string if it's not already
+    const priceString = String(price);
+    
+    // Remove currency symbols, spaces, and other non-numeric characters
+    // Keep only digits, commas, dots, and semicolons (some sites use semicolons as separators)
+    let cleanedPrice = priceString.replace(/[^0-9,.\s]/g, '').trim();
+    
+    // Handle Brazilian price format (R$ 1.234,56)
+    if (cleanedPrice.includes(',') && (cleanedPrice.includes('.') || cleanedPrice.length > 6)) {
+      // Remove all dots (thousand separators)
+      cleanedPrice = cleanedPrice.replace(/\./g, '');
+      // Replace comma with dot for decimal
+      cleanedPrice = cleanedPrice.replace(',', '.');
+    }
+    
+    return cleanedPrice;
+  }
+  
+  /**
+   * Check if a price string is valid
+   * @param {string} price - Price string to validate
+   * @returns {boolean} - True if valid
+   * @private
+   */
+  _isValidPrice(price) {
+    if (!price) return false;
+    
+    // Convert to number for validation
+    const numericPrice = parseFloat(price);
+    
+    // Check if conversion worked and price is a positive number
+    if (isNaN(numericPrice) || numericPrice <= 0) {
+      return false;
+    }
+    
+    // Validate against reasonable range for e-commerce products
+    // Very low or extremely high values are likely errors
+    if (numericPrice < 0.1 || numericPrice > 1000000) {
+      return false;
+    }
+    
+    return true;
+  }
+  
+  /**
+   * Normalize price from string to number
+   * @param {string|number} price - Price to normalize
+   * @returns {number|null} - Normalized price
+   */
+  normalizePrice(price) {
+    if (price === null || price === undefined) return null;
     
     // If already a number, return it
     if (typeof price === 'number') return price;
     
-    try {
-      // Convert to string
-      const priceStr = price.toString();
-      
-      // Remove all non-numeric characters except . and ,
-      let clean = priceStr.replace(/[^\d,\.]/g, '');
-      
-      // No digits? Return null
-      if (!/\d/.test(clean)) return null;
-      
-      // Determine format (Brazilian/European vs US)
-      // Brazilian/European: R$ 1.234,56 / 1.234,56€
-      // US: $1,234.56
-      
-      const isBrazilianFormat = priceStr.includes('R$') || 
-                                /\d{1,3}(?:\.\d{3})+,\d{2}/.test(priceStr);
-      
-      const isEuropeanFormat = priceStr.includes('€') || 
-                               /\d{1,3}(?:\.\d{3})+,\d{2}/.test(priceStr) ||
-                               /\d{1,3}(?:,\d{3})+\.\d{2}/.test(priceStr);
-      
-      if (isBrazilianFormat || isEuropeanFormat) {
-        // If both . and , are present, assume . is thousands and , is decimal
-        if (clean.includes('.') && clean.includes(',')) {
-          clean = clean.replace(/\./g, '').replace(',', '.');
-        } 
-        // If only , is present, assume it's decimal
-        else if (clean.includes(',')) {
-          clean = clean.replace(',', '.');
-        }
-      } else {
-        // For US/international format (1,234.56), remove commas
-        clean = clean.replace(/,/g, '');
-      }
-      
-      // Parse and validate
-      const value = parseFloat(clean);
-      if (isNaN(value)) return null;
-      
-      // Check for unreasonable values (may indicate formatting error)
-      if (value > 1000000) {
-        // Try to fix by dividing by 100 (common error)
-        return value / 100;
-      }
-      
-      return value;
-    } catch (error) {
-      logger.debug('Error normalizing price', { price }, error);
+    // Clean the price string
+    const cleanedPrice = this._cleanPriceString(price);
+    
+    // Convert to number
+    const numericPrice = parseFloat(cleanedPrice);
+    
+    if (isNaN(numericPrice) || numericPrice <= 0) {
       return null;
     }
+    
+    return numericPrice;
   }
-
+  
   /**
    * Extract domain from URL
    * @param {string} url - URL to extract domain from
@@ -1027,7 +1051,8 @@ class GenericAdapter extends AbstractAdapter {
     try {
       const urlObj = new URL(url);
       return urlObj.hostname;
-    } catch (error) {
+    } catch (e) {
+      // Return empty string if URL parsing fails
       return '';
     }
   }

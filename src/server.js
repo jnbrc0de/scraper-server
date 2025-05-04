@@ -64,6 +64,7 @@ const browserService = require('./services/browser/browserService');
 const proxyManager = require('./services/proxy/proxyManager');
 const cacheService = require('./services/cache/cacheService');
 const path = require('path');
+const crypto = require('crypto');
 
 // Create Express app
 const app = express();

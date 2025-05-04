@@ -10,6 +10,7 @@ const { getProxySettings } = require('./stealthPlugin');
 const { URL } = require('url');
 const crypto = require('crypto');
 const antiDetection = require('../../utils/antiDetection');
+const os = require('os');
 
 // Plugin is already registered in stealthPlugin.js
 
@@ -21,22 +22,43 @@ class BrowserService {
     this.activeSessions = 0;
     this.maxSessions = config.browser.poolSize;
     this.lastHealthCheck = Date.now();
-    this.healthCheckInterval = config.browser.healthCheckInterval;
+    this.healthCheckInterval = config.browser.healthCheckInterval || 60000; // Default 1 minute
     this.memoryLimitMB = config.browser.memoryLimitMB;
-    this.userAgents = config.browser.userAgents;
+    this.userAgents = antiDetection.getUserAgents();
     this.sessionHeaders = new Map(); // Track headers for consistency
     this.browserRotationCounter = 0;
-    this.browserRotationThreshold = config.browser.rotationThreshold || 100; // Rotate browser after this many uses
+    this.browserRotationThreshold = config.browser.rotationThreshold || 50; // Rotation after 50 uses
     this.prewarming = false;
     this.prewarmingPromise = null;
+    
+    // Track domain-specific performance metrics
+    this.domainPerformance = new Map();
+    this.pageReuseMap = new Map(); // Track page reuse to avoid memory leaks
+    this.totalPagesCreated = 0;
+    this.successfulRequests = 0;
+    this.failedRequests = 0;
     
     // Initialize browser pool
     this._startHealthMonitor();
     
     // Start prewarming if enabled
-    if (config.browser.prewarmEnabled) {
+    if (config.browser && config.browser.prewarmEnabled) {
       this._startPrewarming();
     }
+    
+    logger.info('Browser service initialized', {
+      maxSessions: this.maxSessions,
+      rotation: this.browserRotationThreshold,
+      prewarming: !!config.browser.prewarmEnabled,
+      memoryLimit: `${this.memoryLimitMB}MB`,
+      system: {
+        platform: os.platform(),
+        release: os.release(),
+        cpus: os.cpus().length,
+        totalMemory: `${Math.round(os.totalmem() / (1024 * 1024))}MB`,
+        freeMemory: `${Math.round(os.freemem() / (1024 * 1024))}MB`
+      }
+    });
   }
 
   /**
@@ -44,7 +66,7 @@ class BrowserService {
    * @private
    */
   _startPrewarming() {
-    const interval = config.browser.prewarmInterval || 60000; // Default 1 minute
+    const interval = config.browser.prewarmInterval || 120000; // Default 2 minutes
     
     setInterval(async () => {
       try {
@@ -68,10 +90,22 @@ class BrowserService {
       return;
     }
     
+    // Check if we have enough free memory for prewarming
+    const memoryUsage = process.memoryUsage();
+    const usedMemoryMB = Math.round(memoryUsage.rss / 1024 / 1024);
+    
+    if (usedMemoryMB > (this.memoryLimitMB * 0.8)) {
+      logger.warn('Skipping browser prewarming due to high memory usage', {
+        usedMemoryMB,
+        memoryLimitMB: this.memoryLimitMB
+      });
+      return;
+    }
+    
     // Check if we need more browsers
     const targetPoolSize = Math.min(
       this.maxSessions, 
-      config.browser.minPrewarmedInstances || 1
+      config.browser.poolSize || 2
     );
     
     if (this.browsers.length >= targetPoolSize) {
@@ -90,19 +124,42 @@ class BrowserService {
         // Create browser instances
         for (let i = 0; i < browsersToCreate; i++) {
           try {
-            // Launch with minimal options
+            // Launch with optimized options for prewarming
             const browser = await chromium.launch({
               headless: true,
               args: [
                 '--disable-dev-shm-usage',
-                '--disable-gpu',
                 '--disable-setuid-sandbox',
-                '--no-sandbox'
+                '--no-sandbox',
+                '--disable-gpu',
+                '--disable-accelerated-2d-canvas',
+                '--disable-web-security', // For better cross-origin support
+                '--disable-features=IsolateOrigins,site-per-process', // For better iframe handling
+                '--disable-blink-features=AutomationControlled' // Hide automation
               ]
             });
             
             // Create a minimal context to fully initialize browser
-            const context = await browser.newContext();
+            const context = await browser.newContext({
+              userAgent: this._getRandomUserAgent(),
+              viewport: { width: 1366, height: 768 },
+              ignoreHTTPSErrors: true
+            });
+            
+            // Set up basic stealth
+            await context.addInitScript({
+              content: `
+                // Hide WebDriver
+                Object.defineProperty(navigator, 'webdriver', {
+                  get: () => false,
+                  configurable: true
+                });
+                
+                // Hide automation
+                window.navigator.chrome = { runtime: {} };
+              `
+            });
+            
             const page = await context.newPage();
             
             // Navigate to about:blank to initialize browser fully
@@ -176,11 +233,28 @@ class BrowserService {
         
         const browser = this.browsers[0];
         
-        // Update usage counter
-        browser._usageCount = (browser._usageCount || 0) + 1;
-        this.browserRotationCounter++;
+        // Check browser age to avoid long-running instances
+        const browserAgeMs = Date.now() - (browser._createdAt || Date.now());
+        const maxBrowserAgeMs = 3600000; // 1 hour max browser age
         
-        return browser;
+        if (browserAgeMs > maxBrowserAgeMs) {
+          logger.info('Replacing aged browser instance', { 
+            ageMs: browserAgeMs,
+            maxAgeMs: maxBrowserAgeMs
+          });
+          
+          // Remove from pool and close
+          this.browsers = this.browsers.filter(b => b !== browser);
+          await browser.close().catch(() => {});
+          
+          // Continue to create a new browser
+        } else {
+          // Update usage counter and return browser
+          browser._usageCount = (browser._usageCount || 0) + 1;
+          this.browserRotationCounter++;
+          
+          return browser;
+        }
       }
       
       // If we're rotating browsers, close the most used one
@@ -208,7 +282,7 @@ class BrowserService {
       
       // Set default launch options
       const defaultOptions = {
-        headless: true,
+        headless: config.performance.useHeadlessMode !== false,
         args: [
           '--disable-dev-shm-usage',
           '--disable-setuid-sandbox',
@@ -218,11 +292,15 @@ class BrowserService {
           '--disable-infobars',
           '--window-size=1366,768',
           '--disable-blink-features=AutomationControlled',
-          '--disable-features=IsolateOrigins,site-per-process'
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-web-security',
+          '--disable-javascript-timers-throttling',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows'
         ],
         chromiumSandbox: false,
         ignoreHTTPSErrors: true,
-        defaultViewport: { width: 1366, height: 768 },
+        defaultViewport: null, // Use window size instead of viewport
         // Add Bright Data proxy configuration
         proxy: getProxySettings()
       };
@@ -244,10 +322,11 @@ class BrowserService {
       // Add metadata
       browser._createdAt = Date.now();
       browser._usageCount = 1;
+      this.browserRotationCounter++;
       
       return browser;
     } catch (error) {
-      logger.error('Error creating browser instance', {}, error);
+      logger.error('Failed to create browser instance', {}, error);
       throw error;
     }
   }
@@ -355,12 +434,14 @@ class BrowserService {
    * @private
    */
   async _setupResourceOptimization(context, options = {}) {
+    // Use config performance settings as defaults
     const defaultOptions = {
-      blockAds: true,
-      optimizeImages: true,
-      blockTrackers: true,
-      blockMedia: false,
+      blockAds: config.performance.optimizeResourceLoading !== false,
+      optimizeImages: !config.performance.disableImages,
+      blockTrackers: config.performance.optimizeResourceLoading !== false,
+      blockMedia: config.performance.disableImages === true,
       blockFonts: false,
+      disableAnimations: config.performance.disableAnimations !== false,
       customPatterns: []
     };
     
@@ -375,7 +456,11 @@ class BrowserService {
         /.*\/adserve\/.*/, 
         /.*\/pagead\/.*/, 
         /.*\/googleads\/.*/,
-        /.*doubleclick\.net\/.*/
+        /.*doubleclick\.net\/.*/,
+        /.*adservice\.google\/.*/,
+        /.*adsystem\.com\/.*/,
+        /.*\/advert.*/,
+        /.*\/banner.*/
       );
     }
     
@@ -386,7 +471,11 @@ class BrowserService {
         /.*\/gtag\/js/,
         /.*\/pixel\.gif/,
         /.*\/collect.*/,
-        /.*facebook\.com\/tr.*/
+        /.*facebook\.com\/tr.*/,
+        /.*google-analytics\.com\/.*/,
+        /.*hotjar\.com\/.*/,
+        /.*clarity\.ms\/.*/,
+        /.*\/beacon.*/
       );
     }
     
@@ -422,7 +511,8 @@ class BrowserService {
         if (resourceType === 'image') {
           // Check if this is likely a primary product image
           const url = request.url();
-          if (url.includes('main') || url.includes('primary') || url.includes('hero')) {
+          if (url.includes('main') || url.includes('primary') || url.includes('hero') || 
+              url.includes('produto') || url.includes('product')) {
             // Let important images load normally
             await route.continue();
             return;
@@ -445,6 +535,40 @@ class BrowserService {
         } else {
           await route.continue();
         }
+      });
+    }
+    
+    // Disable animations if configured
+    if (opts.disableAnimations) {
+      await context.addInitScript({
+        content: `
+          // Disable animations
+          (function() {
+            const style = document.createElement('style');
+            style.type = 'text/css';
+            style.innerHTML = '* { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }';
+            document.head.appendChild(style);
+            
+            // Override animation and transition browser APIs
+            window.requestAnimationFrame = callback => setTimeout(callback, 0);
+            window.cancelAnimationFrame = id => clearTimeout(id);
+            
+            // Create a MutationObserver to apply to dynamically added stylesheets
+            const observer = new MutationObserver(mutations => {
+              for (const mutation of mutations) {
+                if (mutation.addedNodes) {
+                  for (const node of mutation.addedNodes) {
+                    if (node.tagName === 'STYLE' || node.tagName === 'LINK') {
+                      style.innerHTML = '* { animation-duration: 0.001s !important; transition-duration: 0.001s !important; }';
+                    }
+                  }
+                }
+              }
+            });
+            
+            observer.observe(document.head, { childList: true, subtree: true });
+          })();
+        `
       });
     }
   }
